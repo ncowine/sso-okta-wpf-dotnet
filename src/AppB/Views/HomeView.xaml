@@ -1,0 +1,27 @@
+<UserControl x:Class="AppB.Views.HomeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:prism="http://prismlibrary.com/"
+             prism:ViewModelLocator.AutoWireViewModel="True">
+
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+            <TextBlock Style="{StaticResource H1}" Text="Token and delegation explorer" />
+            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
+                       Text="Each button makes a real call to ApiB. Compare the identity ApiB sees with the identity ApiB sees — that difference is the whole of README §7." />
+        </StackPanel>
+
+        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+            <Button Content="Who am I? (ApiB)" Command="{Binding WhoAmICommand}"
+                    ToolTip="GET /invoices/whoami — how ApiB sees this token." />
+            <Button Content="List invoices" Command="{Binding ListOrdersCommand}"
+                    ToolTip="GET /invoices — scope check plus per-record group filtering." />
+            <Button Content="ApiB → ApiB (on behalf of me)" Command="{Binding BillingCommand}"
+                    ToolTip="GET /invoices/{id}/billing — ApiB calls ApiB using the configured §7 pattern." />
+            <Button Content="ApiB → ApiB (service identity)" Command="{Binding ReconcileCommand}"
+                    ToolTip="GET /invoices/reconcile — ApiB calls ApiB as itself, with no user (README §7.2)." />
+        </WrapPanel>
+
+        <TextBox Style="{StaticResource Mono}" Text="{Binding Output, Mode=OneWay}" />
+    </DockPanel>
+</UserControl>

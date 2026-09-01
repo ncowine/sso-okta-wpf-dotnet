@@ -1,0 +1,27 @@
+<UserControl x:Class="AppA.Views.HomeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:prism="http://prismlibrary.com/"
+             prism:ViewModelLocator.AutoWireViewModel="True">
+
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+            <TextBlock Style="{StaticResource H1}" Text="Token and delegation explorer" />
+            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
+                       Text="Each button makes a real call to ApiA. Compare the identity ApiA sees with the identity ApiB sees — that difference is the whole of README §7." />
+        </StackPanel>
+
+        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+            <Button Content="Who am I? (ApiA)" Command="{Binding WhoAmICommand}"
+                    ToolTip="GET /orders/whoami — how ApiA sees this token." />
+            <Button Content="List orders" Command="{Binding ListOrdersCommand}"
+                    ToolTip="GET /orders — scope check plus per-record group filtering." />
+            <Button Content="ApiA → ApiB (on behalf of me)" Command="{Binding BillingCommand}"
+                    ToolTip="GET /orders/{id}/billing — ApiA calls ApiB using the configured §7 pattern." />
+            <Button Content="ApiA → ApiB (service identity)" Command="{Binding ReconcileCommand}"
+                    ToolTip="GET /orders/reconcile — ApiA calls ApiB as itself, with no user (README §7.2)." />
+        </WrapPanel>
+
+        <TextBox Style="{StaticResource Mono}" Text="{Binding Output, Mode=OneWay}" />
+    </DockPanel>
+</UserControl>

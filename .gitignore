@@ -1,0 +1,22 @@
+## Build output
+[Bb]in/
+[Oo]bj/
+artifacts/
+*.user
+*.suo
+.vs/
+.idea/
+
+## Credentials and tokens — README §E.5
+## A leaked client_id is not an incident. A leaked signing key is.
+*.pfx
+*.p12
+*.key
+*.pem
+*.tokens
+**/secrets.json
+appsettings.*.Local.json
+appsettings.Local.json
+
+## Local environment overrides that may contain a real tenant's values
+launchSettings.local.json

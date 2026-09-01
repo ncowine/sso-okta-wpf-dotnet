@@ -10,7 +10,7 @@
 | **User sign-in** | OAuth 2.0 Authorization Code + PKCE, system browser, loopback redirect |
 | **Cross-app SSO** | Okta browser session (primary) · Okta Native SSO (Appendix A) |
 | **Service-to-service** | Four documented patterns, §7 — pick one before building |
-| **Status** | Design document. The demo is built *from* this, not before it. |
+| **Status** | Specification. The runnable demo is in [DEMO.md](DEMO.md). |
 
 ---
 
@@ -1116,8 +1116,8 @@ SSO.sln
 <ItemGroup>
   <!-- OIDC/OAuth. Duende's OidcClient is the reference native-app client:
        standards-pure, PKCE by default, transport-agnostic browser hook. -->
-  <PackageReference Include="IdentityModel.OidcClient" Version="6.0.0" />
-  <PackageReference Include="IdentityModel" Version="7.0.0" />
+  <PackageReference Include="Duende.IdentityModel.OidcClient" Version="7.1.0" />
+  <PackageReference Include="Duende.IdentityModel" Version="8.1.0" />
 
   <PackageReference Include="Prism.DryIoc" Version="8.1.97" />
   <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
@@ -1129,7 +1129,9 @@ SSO.sln
 </ItemGroup>
 ```
 
-**Why `IdentityModel.OidcClient` rather than the Okta .NET SDK:** the Okta client SDKs are thin wrappers over the same standards. Using the standards library directly means the code is portable to any OIDC provider, the samples in RFCs apply verbatim, and you can read exactly what is on the wire. Okta's own .NET guidance points at standard JWT validation for the API side ([JWT validation guide](https://developer.okta.com/code/dotnet/jwt-validation/)).
+> ⚠️ **The package was renamed.** `IdentityModel.OidcClient` and `IdentityModel` are gone from NuGet; they are now `Duende.IdentityModel.OidcClient` and `Duende.IdentityModel`. Older guides (and earlier drafts of this one) still cite the old names, which no longer resolve. The namespaces moved with them: `Duende.IdentityModel.OidcClient`, `Duende.IdentityModel.OidcClient.Browser`.
+
+**Why Duende's OidcClient rather than the Okta .NET SDK:** the Okta client SDKs are thin wrappers over the same standards. Using the standards library directly means the code is portable to any OIDC provider, the samples in RFCs apply verbatim, and you can read exactly what is on the wire. Okta's own .NET guidance points at standard JWT validation for the API side ([JWT validation guide](https://developer.okta.com/code/dotnet/jwt-validation/)).
 
 ### 8.3 The contract
 
@@ -1416,7 +1418,9 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
 
             Policy = new Policy
             {
-                RequireIdentityTokenSignatureVerification = true,
+                // Renamed in OidcClient 7.x (was RequireIdentityTokenSignatureVerification).
+                RequireIdentityTokenSignature = true,
+                ValidateTokenIssuerName = true,
                 ValidateTokenIssuerName = true,
             },
         });
@@ -3791,7 +3795,7 @@ The consolidated card. Every row links to the section that explains it. Suitable
 
 | Topic | Link |
 |---|---|
-| `IdentityModel.OidcClient` | https://github.com/IdentityModel/IdentityModel.OidcClient |
+| `Duende.IdentityModel.OidcClient` | https://github.com/DuendeSoftware/foss |
 | IdentityModel (token client) | https://identitymodel.readthedocs.io/ |
 | JWT bearer authentication | https://learn.microsoft.com/aspnet/core/security/authentication/jwt |
 | Policy-based authorization | https://learn.microsoft.com/aspnet/core/security/authorization/policies |
