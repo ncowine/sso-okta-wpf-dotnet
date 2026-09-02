@@ -4,8 +4,8 @@ The runnable companion to [README.md](README.md). The README is the specificatio
 is the implementation, and every non-obvious decision in the code points back to a README
 section by number.
 
-> **Status:** builds clean, 22/22 tests pass. It will not sign in until you fill in your
-> Okta tenant values — see [Configure Okta](#3-configure-okta).
+> **Status:** builds clean, **42/42 tests pass**, and the full delegation chain runs end to
+> end against a local IdP with no Okta tenant required.
 
 ---
 
@@ -15,88 +15,72 @@ section by number.
 SSO.sln
 ├── src/
 │   ├── Corp.Identity.Client/     Shared desktop auth: PKCE, loopback, DPAPI, refresh
-│   ├── Corp.Identity.Shell/      Prism + shell abstractions (plain WPF / Telerik)
+│   ├── Corp.Identity.Shell/      Prism modules + shell abstractions (plain WPF / Telerik)
 │   ├── Corp.Api.Security/        Shared API auth: validation + §7 delegation patterns
 │   ├── AppA/  AppB/              WPF clients (.NET 8, Prism 8, Velopack)
-│   └── ApiA/  ApiB/              ASP.NET Core APIs that call each other
+│   └── ApiA/  ApiB/              ASP.NET Core APIs that call each other, both directions
+├── tools/
+│   └── DevIdp/                   Local stand-in for Okta — run everything with no tenant
 ├── tests/
-│   └── Corp.Api.Security.Tests/  Negative token tests + CI configuration guards
+│   └── Corp.Api.Security.Tests/  Negative token tests, CI guards, end-to-end delegation
+├── infra/okta/                   Terraform for the real tenant
 └── build/
     ├── publish.ps1               Velopack packaging
     └── register-uri-scheme.ps1   OPTIONAL, not used — see "About the registry"
 ```
 
-Both WPF apps share one authentication library and differ only in configuration. Both
-APIs share one security library. Nothing is duplicated — divergent copies of auth code
-become a security bug in whichever copy gets less attention (README §8.1).
+Both WPF apps share one authentication library; both APIs share one security library.
+Nothing is duplicated — divergent copies of auth code become a security bug in whichever
+copy gets less attention (README §8.1).
 
 ---
 
-## 1. Prerequisites
+## Run it in three commands
 
-| | |
-|---|---|
-| .NET 8 SDK | Present. `global.json` pins `8.0.421`. |
-| Okta org | Free Integrator plan is enough — it includes API Access Management (README §5.1). |
-| Velopack CLI | Only for packaging: `dotnet tool install -g vpk` |
-| Telerik | **Not required.** See [Enabling Telerik](#enabling-telerik). |
-
-## 2. Build and test
+No Okta tenant needed. `tools/DevIdp` is a local authorization server that speaks the same
+protocol.
 
 ```bash
-dotnet build SSO.sln
-dotnet test tests/Corp.Api.Security.Tests
-```
-
-Both should be clean before you touch any configuration.
-
-## 3. Configure Okta
-
-Work through **README §6**, filling in **README Appendix B** as you go. Then transfer the
-values into the four `appsettings.json` files — every placeholder is spelled `REPLACE-ME`,
-and the applications refuse to start with a clear message if you miss one.
-
-| File | Needs |
-|---|---|
-| `src/AppA/appsettings.json` | Okta domain, AppA client ID, ApiA authorization server ID |
-| `src/AppB/appsettings.json` | Okta domain, AppB client ID, ApiB authorization server ID |
-| `src/ApiA/appsettings.json` | ApiA issuer + audience; ApiA service client ID + cert thumbprint; ApiB downstream |
-| `src/ApiB/appsettings.json` | ApiB issuer + audience; ApiB service client ID + cert thumbprint; ApiA downstream |
-
-**Redirect URIs.** Register all three loopback ports per app, sign-in *and* sign-out:
-
-```
-AppA   http://127.0.0.1:8765/callback   :8766   :8767
-       http://127.0.0.1:8765/signout-callback   :8766   :8767
-AppB   http://127.0.0.1:8865/callback   :8866   :8867
-       http://127.0.0.1:8865/signout-callback   :8866   :8867
-```
-
-The client probes its ports in order and fails over when one is bound, so two instances
-of the same app can both sign in (README §4.3, §8.5). Every port it might use must be
-registered, or Okta rejects the authorize request.
-
-> Do not write code until **Token Preview** (README §6.8) returns a clean token. It is the
-> same policy engine your app will hit, and it diagnoses in thirty seconds what otherwise
-> takes a day.
-
-## 4. Run it
-
-```bash
-dotnet run --project src/ApiA     # https://localhost:7201
-dotnet run --project src/ApiB     # https://localhost:7202
+dotnet run --project tools/DevIdp     # https://localhost:7100
+dotnet run --project src/ApiA         # https://localhost:7201
+dotnet run --project src/ApiB         # https://localhost:7202
 dotnet run --project src/AppA
 ```
 
-`AppA` tries a silent restore, falls back to an interactive browser sign-in, then lands on
-the token explorer.
+The `Development` configuration in each project already points at DevIdp. Sign in as
+**alice@contoso.com** (App-Finance + App-Warehouse) or **bob@contoso.com** (App-Warehouse
+only) — the difference between them is what makes §7 visible.
+
+If the browser complains about the certificate, trust the ASP.NET dev cert once:
+
+```bash
+dotnet dev-certs https --trust
+```
+
+### About DevIdp
+
+⚠️ **Development only.** It authenticates nobody, checks no credentials, and signs with a
+key generated at startup. It exists so the flows in README §7 and §10 can be exercised and
+debugged before a tenant exists.
+
+It deliberately reproduces Okta's *shapes*, because those are what break code:
+
+| | |
+|---|---|
+| Two authorization servers, one per API | README §5.2 Variant B |
+| `scp` and `groups` as JSON **arrays** | README §3.4 |
+| Access-token `sub` = login; ID-token `sub` = user id | README §D.4 — the mismatch that catches everyone |
+| `uid` and `cid` claims | README §D.5 |
+| Rotating refresh tokens with replay detection | README §5.6 |
+| Trusted-server checks on token exchange | README §5.7 |
+| A session cookie, so the second app signs in silently | README §10.1 |
+| `prompt=none` returning `login_required` | README §8.9 |
 
 ---
 
 ## What to actually look at
 
-The demo exists to make README §7 concrete. Four buttons, and the interesting part is
-comparing what each one produces.
+### AppA — the delegation explorer
 
 | Button | Endpoint | What it shows |
 |---|---|---|
@@ -105,28 +89,53 @@ comparing what each one produces.
 | **ApiA → ApiB (on behalf of me)** | `GET /orders/{id}/billing` | The delegated call, using whichever §7 pattern is configured |
 | **ApiA → ApiB (service identity)** | `GET /orders/reconcile` | The same hop as a *service*, with no user at all |
 
-### The exercise that teaches the most
+### AppB — the return direction
 
-1. Click **Who am I? (ApiA)**. Note `subject` and `callingClientId`.
-2. Click **ApiA → ApiB (on behalf of me)**. ApiB reports the **same subject**, but
-   `callingClientId` is now ApiA's *service* client. The user survived the hop; the acting
-   service is recorded. That is README §7.1 working.
-3. Click **ApiA → ApiB (service identity)**. Now `isServicePrincipal` is `true` and there
-   is **no subject at all**. ApiB is authorising the *service*, and your permissions were
-   never consulted — which is exactly why §7.2 says never to use this shape for a
-   user-initiated request.
-4. Open `src/ApiA/appsettings.json`, set `Delegation:Pattern` to `ClientRelayed`, restart
-   ApiA, and repeat step 2. It fails, and the error tells you why: Pattern 3 requires the
-   desktop client to acquire a *second* token for `api://apib` and relay it
-   (README §7.3, §8.9). That failure is the point — it shows precisely what Pattern 1 was
-   doing for you.
+AppB is a separate Okta client with its own tokens, not a copy of AppA.
+
+| Button | Endpoint | What it shows |
+|---|---|---|
+| **Who am I? (ApiB)** | `GET /invoices/whoami` | AppB's own token, from a different authorization server |
+| **Get invoice** | `GET /invoices/{id}` | Requires `App-Finance`: Alice succeeds, Bob is denied |
+| **ApiB → ApiA** | `GET /invoices/{id}/order-context` | The return direction — needs its own trusted-server entry (README §5.7) |
+| **Trip the cycle guard** | `GET /invoices/cycle-demo` | Drives ApiB → ApiA → ApiB until the depth guard returns **508** (README §7.7) |
+
+### The exercises that teach the most
+
+**1. Delegation preserves identity.** Click **Who am I? (ApiA)**, note the subject. Click
+**ApiA → ApiB (on behalf of me)**: ApiB reports the *same subject*, but `callingClientId`
+is now ApiA's service client. The user survived the hop; the acting service is recorded.
+
+**2. A service token has no user.** Click **ApiA → ApiB (service identity)**:
+`isServicePrincipal` is `true` and there is *no subject*. ApiB is authorising the service,
+and your permissions were never consulted — which is exactly why §7.2 says never to use
+this shape for a user-initiated request.
+
+**3. The downstream API does not trust the upstream one.** Sign out, sign in as
+**bob@contoso.com**, and click **ApiA → ApiB** again. ApiA is happy to make the call; ApiB
+returns 403, because the delegated token carries *Bob's* groups rather than ApiA's opinion
+of them. Forwarding ApiA's own token would have destroyed exactly this property (README §7.5).
+
+**4. Cross-app SSO.** With AppA running, launch AppB. A browser window flashes and you are
+*not* prompted — the DevIdp session cookie was reused, and AppB received its own separate
+tokens (README §10.1).
+
+**5. The cycle guard.** In AppB, click **Trip the cycle guard**. Every hop is individually
+valid and nothing in OAuth stops it; the depth guard does, at 508. Unguarded this can
+exhaust the org-wide Okta `/token` rate limit and block sign-in for unrelated applications
+(README §7.7).
 
 ### Switching delegation pattern
 
 ```jsonc
-// src/ApiA/appsettings.json
+// src/ApiA/appsettings.Development.json
 "Delegation": { "Pattern": "OnBehalfOf" }   // or "ClientRelayed"
 ```
+
+Both work. Under `ClientRelayed`, AppA acquires a **second** access token for `api://apib`
+and relays it in `X-Downstream-Authorization`; ApiA forwards that instead of exchanging
+(README §7.3, §8.9). Watch the DevIdp log: under `OnBehalfOf` you see a token-exchange
+call, under `ClientRelayed` you see a second authorize round trip from the desktop.
 
 Pattern 2 (client credentials) is not a setting — it is a *separate named client*, chosen
 per call site. `OrdersController.Billing` uses the user client; `OrdersController.Reconcile`
@@ -135,18 +144,71 @@ in §7 is visible in review rather than buried in a handler (README §9.5).
 
 ---
 
+## Tests
+
+```bash
+dotnet test tests/Corp.Api.Security.Tests
+```
+
+**42 tests**, weighted where README §15.3 says they should be — towards what must be
+**rejected**.
+
+| Suite | Covers |
+|---|---|
+| `TokenValidationTests` | Wrong audience, ID token at an API, foreign issuer, expired, not-yet-valid, unknown key, HMAC `alg` confusion, tampered payload, missing scope (403 not 401), service token on a user-only endpoint |
+| `ConfigurationGuardTests` | The README §12.2 non-negotiables, as build failures |
+| `ClientAssertionTests` | `private_key_jwt`: audience is the token endpoint, RS256, verifies against the public key, unique `jti`, short lifetime, and that the dev factory refuses a non-local endpoint |
+| `DelegationDepthTests` | Header increment, refusal at the limit, malformed header treated as zero, and that a simulated cycle terminates |
+| `EndToEndDelegationTests` | **The real chain**: DevIdp issues a token, ApiA validates and delegates, ApiB validates the delegated token and enforces its own authorization — including Bob being denied and the cycle tripping 508 |
+
+The end-to-end suite runs all three hosts in-process and wires them to each other with
+`HttpClient` instances backed by their own test servers, so no ports are bound.
+
+---
+
+## Going to a real Okta tenant
+
+1. **`infra/okta/`** — Terraform for the whole Variant B topology: groups, two
+   authorization servers, scopes, filtered groups claims, two native apps with all
+   loopback redirect URIs, two service identities on `private_key_jwt`, assignments, and
+   access policies with 15-minute tokens and rotating refresh.
+
+   ```bash
+   cd infra/okta
+   cp terraform.tfvars.example terraform.tfvars   # then edit
+   export OKTA_API_TOKEN=...
+   terraform init && terraform apply
+   ```
+
+   `terraform output manual_steps_remaining` lists the four things Terraform cannot
+   reliably cover — trusted servers, the Token Exchange grant, the persistent session
+   cookie, and verifying Token Preview.
+
+2. **Fill in the four `appsettings.json` files** from the Terraform outputs (they map
+   one-to-one onto README Appendix B). Every placeholder reads `REPLACE-ME`, and the
+   applications refuse to start with a clear message if you miss one.
+
+3. **Generate the service certificates** on each API host (README §6.6) and set
+   `Okta:Service:SigningCertificateThumbprint`. Leaving it blank selects the development
+   assertion factory, which **refuses to run against anything but a loopback endpoint** —
+   so it cannot silently weaken a real deployment.
+
+4. **Run manual test cases 3, 4, 11 and 12** from README §15.5. Case 4 (launch AppB after
+   closing every browser window) is the one that catches the persistent-cookie setting.
+
+---
+
 ## About the registry
 
 **The loopback redirect requires no registry writes.** This is worth stating plainly
-because it is a common assumption, and it was the premise of the original request for
-this demo.
+because it is a common assumption.
 
 `HttpListener` binds a high port on `127.0.0.1` as the interactive user. On Windows that
 needs no URL ACL, no elevation, and no registration anywhere. README §4.3 chose loopback
 over a custom URI scheme (`appa://`) precisely to avoid registry writes — and, more
-importantly, because a custom scheme is a **machine-global namespace**: any other
-installed application can register the same `appa://` and silently hijack your OAuth
-callback, with no way for you to detect or prevent it.
+importantly, because a custom scheme is a **machine-global namespace**: any other installed
+application can register the same `appa://` and silently hijack your OAuth callback, with
+no way for you to detect or prevent it.
 
 **What Velopack does set up** (`build/publish.ps1`):
 
@@ -154,12 +216,12 @@ callback, with no way for you to detect or prevent it.
 |---|---|
 | Install location | `%LOCALAPPDATA%\Corp.AppA` — per-user, **no elevation** |
 | Start Menu shortcut | Yes |
-| Add/Remove Programs | `HKCU\...\Uninstall` — the only registry it touches, and it is ordinary per-user install bookkeeping, unrelated to OAuth |
+| Add/Remove Programs | `HKCU\...\Uninstall` — the only registry it touches, ordinary per-user install bookkeeping, unrelated to OAuth |
 | Updates and rollback | Via `VelopackApp.Build().Run()`, the first line of `App.OnStartup` |
 
 `VelopackApp.Build().Run()` must stay the first statement in `OnStartup`: on the first run
-after an install or update it performs the hook and exits the process, so anything above
-it would execute during installation.
+after an install or update it performs the hook and exits the process, so anything above it
+would execute during installation.
 
 ```powershell
 ./build/publish.ps1 -App AppA -Version 1.0.0
@@ -177,8 +239,8 @@ It writes to `HKCU`, so it needs no elevation either.
 
 The shell talks to `IUserInteraction`, which has two implementations. `WpfUserInteraction`
 (plain WPF) is used today; `TelerikUserInteraction` is compiled only under the `TELERIK`
-symbol. Nothing outside `Corp.Identity.Shell` references either, so switching is a
-one-line registration change.
+symbol. Nothing outside `Corp.Identity.Shell` references either, so switching is a one-line
+registration change.
 
 Once your licensed Telerik feed is configured:
 
@@ -189,31 +251,19 @@ Once your licensed Telerik feed is configured:
 4. Replace the busy overlay in `ShellWindow.xaml` with a `RadBusyIndicator` wrapping the
    region (README §8.12).
 
-The theme is set in `OnStartup`, before any window is created, already guarded by
-`#if TELERIK`.
+The theme is set in `OnStartup` before any window is created, already guarded by `#if TELERIK`.
 
 ---
 
-## Known gaps
+## Remaining gaps
 
-Honest list of what is scaffolded but not finished.
+Honest list. Everything else previously listed here is now closed.
 
-| Gap | Notes |
+| Gap | Why it is still open |
 |---|---|
-| **No live Okta tenant** | Every value is a placeholder. Nothing has been run end to end against Okta. |
-| **`X509ClientAssertionFactory` untested** | Needs a real certificate in `LocalMachine\My`. The code follows README §7.1 but has never authenticated to Okta. |
-| **`ApiB → ApiA` direction unused** | Configured symmetrically, but no ApiB endpoint calls back into ApiA yet. The delegation-depth guard (README §7.7) is registered and unit-testable but not exercised by a real cycle. |
-| **Pattern 3 client half missing** | `ClientRelayedTokenHandler` forwards the second token, but `AppA` does not yet acquire one (README §8.9). Selecting `ClientRelayed` fails with an explanatory error — deliberately, see the exercise above. |
-| **No Prism modules** | Views are registered directly. `ConfigureModuleCatalog` (README §8.11) is not used at this size. |
-| **`AppB` is a mirror of `AppA`** | Same shape against ApiB. Enough to demonstrate cross-app SSO (README §10.1); not a distinct application. |
-| **No integration tests against Okta** | README §15.4 describes them; they need a tenant. |
-
-## Next steps
-
-1. Create the Okta tenant and work README §6 → Appendix B.
-2. Run manual test cases 3 and 4 from README §15.5 — launch `AppB` after `AppA` and
-   confirm no prompt. That is the SSO moment, and case 4 (after closing all browser
-   windows) is the one that catches the persistent-cookie setting in README §10.1.
-3. Run the §7.6 spike to confirm Token Exchange works on your org, then commit to a
-   pattern.
-4. Fill the gaps above that matter to you.
+| **Never run against a live Okta tenant** | The protocol is exercised end to end against DevIdp, and Terraform provisions the tenant — but DevIdp is not Okta. Expect to hit real-tenant specifics: policy evaluation order, assignment gates, the multi-audience EA feature if you choose Variant A, and TLS interception on the way out (README §13.4). |
+| **`X509ClientAssertionFactory` never used against Okta** | Its output is now fully unit-tested — audience, algorithm, signature, `jti`, lifetime — but no Okta endpoint has ever accepted one. The certificate ACL path (README §13.3) is likewise untested on a real IIS host. |
+| **Terraform not applied** | Written against provider `~> 4.9` and never run. Attribute names drift across provider majors; expect to fix a few on first `plan`. Trusted servers and the Token Exchange grant are deliberately left as manual steps. |
+| **No DPoP** | README §12.4 treats it as a planned phase two with a defined trigger, not a gap in this build. Token acquisition sits behind `IAuthenticationService`, so adding it touches one class per side. |
+| **No back-channel logout** | Both APIs are stateless, so there is no server-side session to invalidate (README §11.3). It becomes necessary only if that changes. |
+| **Velopack packaging unexercised** | `build/publish.ps1` is written but has not been run; `vpk` is not installed on this machine. |

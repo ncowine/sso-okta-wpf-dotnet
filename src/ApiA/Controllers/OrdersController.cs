@@ -92,6 +92,30 @@ public sealed class OrdersController(
     }
 
     /// <summary>
+    /// The other half of the deliberate cycle. Calls back into ApiB, which calls ApiA
+    /// again, until <see cref="Corp.Api.Security.Delegation.DelegationDepthHandler"/>
+    /// refuses and the request fails with HTTP 508 (README §7.7).
+    /// </summary>
+    [HttpGet("cycle-demo")]
+    [Authorize(Policy = "apia.read")]
+    [Authorize(Policy = PolicyNames.RequiresUser)]
+    public async Task<IActionResult> CycleDemo(CancellationToken ct)
+    {
+        var client = httpClientFactory.CreateClient(OktaDelegationExtensions.UserClient("ApiB"));
+
+        using var response = await client.GetAsync("invoices/cycle-demo", ct);
+
+        return Ok(new
+        {
+            depthOnArrival = Request.Headers.TryGetValue(
+                Corp.Api.Security.Delegation.DelegationDepthHandler.Header, out var raw)
+                ? raw.ToString() : "0",
+            downstreamStatus = (int)response.StatusCode,
+            downstreamBody = await response.Content.ReadAsStringAsync(ct),
+        });
+    }
+
+    /// <summary>
     /// A background-style call using ApiA's OWN identity, with no user involved.
     /// The token ApiB receives has a 'cid' and no 'uid' (README §7.2, §D.5).
     /// </summary>

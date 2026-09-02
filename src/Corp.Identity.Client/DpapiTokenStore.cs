@@ -22,9 +22,17 @@ public interface ITokenStore
 /// </remarks>
 public sealed record StoredTokens
 {
-    public string? RefreshToken { get; init; }
+    /// <summary>
+    /// Refresh tokens keyed by authorization server ID. A refresh token is scoped to the
+    /// server that issued it, so under Variant B (one AS per API) a client that talks to
+    /// two APIs holds two of them (README §5.2, §8.9).
+    /// </summary>
+    public Dictionary<string, string> RefreshTokens { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>Kept solely because RP-initiated logout needs it as id_token_hint (README §11.2).</summary>
     public string? IdToken { get; init; }
-    public DateTimeOffset RefreshTokenObtainedAt { get; init; } = DateTimeOffset.UtcNow;
+
+    public DateTimeOffset ObtainedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
 /// <summary>

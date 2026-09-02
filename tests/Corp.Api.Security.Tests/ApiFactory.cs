@@ -1,3 +1,5 @@
+extern alias ApiAHost;
+
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -10,7 +12,7 @@ namespace Corp.Api.Security.Tests;
 /// <summary>
 /// Hosts ApiA in-process with a local signing key. README §15.3.
 /// </summary>
-public sealed class ApiFactory : WebApplicationFactory<Program>
+public sealed class ApiFactory : WebApplicationFactory<ApiAHost::Program>
 {
     public TestTokenFactory Tokens { get; } = new();
 

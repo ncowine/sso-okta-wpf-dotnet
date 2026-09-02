@@ -6,20 +6,22 @@
 
     <DockPanel>
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-            <TextBlock Style="{StaticResource H1}" Text="Token and delegation explorer" />
+            <TextBlock Style="{StaticResource H1}" Text="Billing — the return direction" />
             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
-                       Text="Each button makes a real call to ApiB. Compare the identity ApiB sees with the identity ApiB sees — that difference is the whole of README §7." />
+                       Text="AppB is a separate Okta client with its own tokens. It exercises ApiB, including ApiB calling back into ApiA, and the delegation depth guard." />
         </StackPanel>
 
         <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,16">
             <Button Content="Who am I? (ApiB)" Command="{Binding WhoAmICommand}"
-                    ToolTip="GET /invoices/whoami — how ApiB sees this token." />
-            <Button Content="List invoices" Command="{Binding ListOrdersCommand}"
-                    ToolTip="GET /invoices — scope check plus per-record group filtering." />
-            <Button Content="ApiB → ApiB (on behalf of me)" Command="{Binding BillingCommand}"
-                    ToolTip="GET /invoices/{id}/billing — ApiB calls ApiB using the configured §7 pattern." />
-            <Button Content="ApiB → ApiB (service identity)" Command="{Binding ReconcileCommand}"
-                    ToolTip="GET /invoices/reconcile — ApiB calls ApiB as itself, with no user (README §7.2)." />
+                    ToolTip="GET /invoices/whoami — how ApiB sees AppB's token." />
+            <Button Content="Get invoice" Command="{Binding InvoiceCommand}"
+                    ToolTip="GET /invoices/{id} — requires App-Finance. Alice succeeds, Bob is denied." />
+            <Button Content="ApiB → ApiA (on behalf of me)" Command="{Binding OrderContextCommand}"
+                    ToolTip="GET /invoices/{id}/order-context — the return direction of the bidirectional relationship." />
+            <Button Content="Trip the cycle guard" Command="{Binding CycleCommand}"
+                    ToolTip="GET /invoices/cycle-demo — drives ApiB → ApiA → ApiB until the depth guard returns 508 (README §7.7)." />
+            <Button Content="Summary (service-safe)" Command="{Binding SummaryCommand}"
+                    ToolTip="GET /invoices/summary — aggregate data with no per-user component." />
         </WrapPanel>
 
         <TextBox Style="{StaticResource Mono}" Text="{Binding Output, Mode=OneWay}" />

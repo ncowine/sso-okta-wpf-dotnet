@@ -9,8 +9,8 @@ using Microsoft.Extensions.Options;
 namespace Corp.Identity.Client;
 
 /// <summary>
-/// Authorization Code + PKCE against an Okta Custom Authorization Server,
-/// via the system browser and a loopback redirect. README §8.7, §8.8.
+/// Authorization Code + PKCE against an Okta Custom Authorization Server, via the system
+/// browser and a loopback redirect. README §8.7, §8.8, §8.9.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class OktaAuthenticationService : IAuthenticationService, IDisposable
@@ -33,7 +33,7 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private readonly Dictionary<string, OidcClient> _clients = new(StringComparer.Ordinal);
-    private StoredTokens? _tokens;
+    private StoredTokens _tokens = new();
     private bool _disposed;
 
     public OktaAuthenticationService(
@@ -69,33 +69,13 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
         try
         {
             var resource = _options.PrimaryResource;
-            var client = ClientFor(resource);
+            var result = await AuthorizeAsync(resource, allowInteractive: true, ct).ConfigureAwait(false);
 
-            var result = await client.LoginAsync(new LoginRequest(), ct).ConfigureAwait(false);
+            if (!result.Succeeded) return result;
 
-            if (result.IsError)
-            {
-                _log.LogWarning("Sign-in failed: {Error} {Description}", result.Error, result.ErrorDescription);
-                return AuthenticationResult.Failed(result.Error, result.ErrorDescription);
-            }
-
-            _tokens = new StoredTokens
-            {
-                RefreshToken = result.RefreshToken,
-                IdToken = result.IdentityToken,
-                RefreshTokenObtainedAt = DateTimeOffset.UtcNow,
-            };
-            await _store.SaveAsync(_tokens, ct).ConfigureAwait(false);
-
-            _accessTokens.Set(resource.Name, result.AccessToken, result.AccessTokenExpiration);
-
-            // Identity comes from the ID token (README §3.2). OidcClient has already
-            // validated its signature, issuer, audience and nonce.
-            User = result.User;
             Raise(AuthenticationChangeReason.SignedIn);
-
-            _log.LogInformation("Signed in as {Subject}", SubjectOf(result.User));
-            return AuthenticationResult.Success(result.User);
+            _log.LogInformation("Signed in as {Subject}", SubjectOf(User));
+            return result;
         }
         finally
         {
@@ -105,14 +85,18 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
 
     public async Task<AuthenticationResult> TryRestoreSessionAsync(CancellationToken ct = default)
     {
-        _tokens = await _store.LoadAsync(ct).ConfigureAwait(false);
-        if (_tokens?.RefreshToken is null) return AuthenticationResult.NoSession();
+        _tokens = await _store.LoadAsync(ct).ConfigureAwait(false) ?? new StoredTokens();
+
+        var resource = _options.PrimaryResource;
+        if (!_tokens.RefreshTokens.ContainsKey(resource.AuthorizationServerId))
+            return AuthenticationResult.NoSession();
 
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await RefreshAsync(_options.PrimaryResource, ct).ConfigureAwait(false);
+            await RefreshAsync(resource, ct).ConfigureAwait(false);
             Raise(AuthenticationChangeReason.SessionRestored);
+
             return User is not null
                 ? AuthenticationResult.Success(User)
                 : AuthenticationResult.NoSession();
@@ -120,11 +104,11 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
         catch (RefreshFailedException ex)
         {
             // Expected and routine: the refresh token expired, was rotated out, was
-            // revoked by an admin, or the user was deprovisioned. Not an error — it
-            // just means an interactive sign-in is required.
+            // revoked by an admin, or the user was deprovisioned. Not an error — it just
+            // means an interactive sign-in is required.
             _log.LogInformation("Session could not be restored ({Reason}); sign-in required", ex.OktaError);
             _store.Clear();
-            _tokens = null;
+            _tokens = new StoredTokens();
             return AuthenticationResult.NoSession();
         }
         finally
@@ -151,7 +135,29 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
                     $"Unknown resource '{resourceName}'. Add it under Okta:Resources in appsettings.json.");
             }
 
-            return await RefreshAsync(resource, ct).ConfigureAwait(false);
+            // A refresh token is scoped to the authorization server that issued it. Under
+            // Variant B (one AS per API) a token from apia-as is useless at apib-as, so a
+            // second audience needs its own authorize round trip — silent, because the
+            // Okta session cookie is already in the browser (README §5.2, §8.9).
+            if (_tokens.RefreshTokens.ContainsKey(resource.AuthorizationServerId))
+                return await RefreshAsync(resource, ct).ConfigureAwait(false);
+
+            _log.LogInformation(
+                "No refresh token for authorization server {AuthServer}; acquiring a token for " +
+                "{Resource} via a silent authorize (README §8.9)",
+                resource.AuthorizationServerId, resource.Name);
+
+            var result = await AuthorizeAsync(resource, allowInteractive: true, ct).ConfigureAwait(false);
+
+            if (!result.Succeeded)
+            {
+                throw new RefreshFailedException(
+                    result.Error ?? "authorize_failed", result.ErrorDescription);
+            }
+
+            return _accessTokens.TryGet(resourceName, out var acquired)
+                ? acquired
+                : throw new RefreshFailedException("no_access_token");
         }
         finally
         {
@@ -162,16 +168,83 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
     public void InvalidateAccessToken(string resourceName) => _accessTokens.Remove(resourceName);
 
     /// <summary>
-    /// Acquires a fresh access token for <paramref name="resource"/> using the stored
-    /// refresh token, persisting the rotated replacement immediately. README §8.8.
+    /// Runs an authorization-code flow for one resource, trying <c>prompt=none</c> first.
+    /// </summary>
+    /// <remarks>
+    /// <c>prompt=none</c> is what makes this safe to attempt automatically: Okta either
+    /// completes silently against the existing session cookie, or returns
+    /// <c>login_required</c> — it never surprises the user with a browser window mid
+    /// workflow (README §8.9, §10.1).
+    /// </remarks>
+    private async Task<AuthenticationResult> AuthorizeAsync(
+        ResourceOptions resource, bool allowInteractive, CancellationToken ct)
+    {
+        var client = ClientFor(resource);
+
+        var silent = new LoginRequest();
+        silent.FrontChannelExtraParameters.Add("prompt", "none");
+
+        var result = await client.LoginAsync(silent, ct).ConfigureAwait(false);
+
+        if (result.IsError && IsInteractionRequired(result.Error))
+        {
+            if (!allowInteractive)
+                return AuthenticationResult.Failed(result.Error, result.ErrorDescription);
+
+            _log.LogInformation("Silent authorize returned {Error}; prompting interactively", result.Error);
+            result = await client.LoginAsync(new LoginRequest(), ct).ConfigureAwait(false);
+        }
+
+        if (result.IsError)
+        {
+            _log.LogWarning("Authorize failed for {Resource}: {Error} {Description}",
+                resource.Name, result.Error, result.ErrorDescription);
+
+            return AuthenticationResult.Failed(result.Error, result.ErrorDescription);
+        }
+
+        if (result.RefreshToken is not null)
+        {
+            var refreshTokens = new Dictionary<string, string>(_tokens.RefreshTokens, StringComparer.Ordinal)
+            {
+                [resource.AuthorizationServerId] = result.RefreshToken,
+            };
+
+            _tokens = _tokens with
+            {
+                RefreshTokens = refreshTokens,
+                IdToken = result.IdentityToken ?? _tokens.IdToken,
+                ObtainedAt = DateTimeOffset.UtcNow,
+            };
+
+            await _store.SaveAsync(_tokens, ct).ConfigureAwait(false);
+        }
+
+        _accessTokens.Set(resource.Name, result.AccessToken, result.AccessTokenExpiration);
+
+        // Identity comes from the ID token (README §3.2). OidcClient has already validated
+        // its signature, issuer, audience and nonce.
+        User ??= result.User;
+
+        return AuthenticationResult.Success(User ?? result.User);
+    }
+
+    private static bool IsInteractionRequired(string? error) =>
+        error is "login_required" or "interaction_required" or "consent_required"
+              or "account_selection_required";
+
+    /// <summary>
+    /// Acquires a fresh access token using the refresh token for this resource's
+    /// authorization server, persisting the rotated replacement immediately. README §8.8.
     /// </summary>
     private async Task<string> RefreshAsync(ResourceOptions resource, CancellationToken ct)
     {
-        if (_tokens?.RefreshToken is null) throw new RefreshFailedException("no_refresh_token");
+        if (!_tokens.RefreshTokens.TryGetValue(resource.AuthorizationServerId, out var refreshToken))
+            throw new RefreshFailedException("no_refresh_token");
 
         var client = ClientFor(resource);
         var result = await client
-            .RefreshTokenAsync(_tokens.RefreshToken, cancellationToken: ct)
+            .RefreshTokenAsync(refreshToken, cancellationToken: ct)
             .ConfigureAwait(false);
 
         if (result.IsError) throw new RefreshFailedException(result.Error ?? "unknown", result.ErrorDescription);
@@ -180,11 +253,16 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
         // Persisting immediately is critical — if the process dies between the response
         // and the write, the stored token is already dead and the user faces an
         // unexplained sign-in on next launch.
+        var refreshTokens = new Dictionary<string, string>(_tokens.RefreshTokens, StringComparer.Ordinal)
+        {
+            [resource.AuthorizationServerId] = result.RefreshToken ?? refreshToken,
+        };
+
         _tokens = _tokens with
         {
-            RefreshToken = result.RefreshToken ?? _tokens.RefreshToken,
+            RefreshTokens = refreshTokens,
             IdToken = result.IdentityToken ?? _tokens.IdToken,
-            RefreshTokenObtainedAt = DateTimeOffset.UtcNow,
+            ObtainedAt = DateTimeOffset.UtcNow,
         };
         await _store.SaveAsync(_tokens, ct).ConfigureAwait(false);
 
@@ -217,23 +295,25 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
 
     public async Task SignOutAsync(SignOutScope scope, CancellationToken ct = default)
     {
-        var idToken = _tokens?.IdToken;
-        var refreshToken = _tokens?.RefreshToken;
+        var idToken = _tokens.IdToken;
+        var refreshTokens = _tokens.RefreshTokens;
 
-        // Revoke server-side FIRST — if the process dies after clearing local state,
-        // an unrevoked refresh token is left alive in Okta (README §11.1).
-        if (refreshToken is not null) await RevokeAsync(refreshToken, "refresh_token", ct).ConfigureAwait(false);
+        // Revoke server-side FIRST — if the process dies after clearing local state, an
+        // unrevoked refresh token is left alive in Okta (README §11.1). Every
+        // authorization server we hold a token for needs its own revocation call.
+        foreach (var (authServerId, token) in refreshTokens)
+            await RevokeAsync(authServerId, token, ct).ConfigureAwait(false);
 
         _store.Clear();
         _accessTokens.Clear();
-        _tokens = null;
+        _tokens = new StoredTokens();
         User = null;
         Raise(AuthenticationChangeReason.SignedOut);
 
         if (scope != SignOutScope.Global || idToken is null) return;
 
-        // RP-initiated logout must happen in the SYSTEM BROWSER — that is where the
-        // Okta session cookie lives (README §10.1, §11.2).
+        // RP-initiated logout must happen in the SYSTEM BROWSER — that is where the Okta
+        // session cookie lives (README §10.1, §11.2).
         var resource = _options.PrimaryResource;
         var port = _options.RedirectPorts[0];
         var url = $"{resource.IssuerFor(_options.Domain)}/v1/logout" +
@@ -250,19 +330,18 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
         }
     }
 
-    private async Task RevokeAsync(string token, string hint, CancellationToken ct)
+    private async Task RevokeAsync(string authServerId, string token, CancellationToken ct)
     {
         try
         {
-            var resource = _options.PrimaryResource;
             using var http = _httpClientFactory.CreateClient(nameof(OktaAuthenticationService));
 
             using var response = await http.PostAsync(
-                $"{resource.IssuerFor(_options.Domain)}/v1/revoke",
+                $"https://{_options.Domain}/oauth2/{authServerId}/v1/revoke",
                 new FormUrlEncodedContent(new Dictionary<string, string>
                 {
                     ["token"] = token,
-                    ["token_type_hint"] = hint,
+                    ["token_type_hint"] = "refresh_token",
                     ["client_id"] = _options.ClientId,
                 }),
                 ct).ConfigureAwait(false);
@@ -281,7 +360,7 @@ public sealed class OktaAuthenticationService : IAuthenticationService, IDisposa
     // ── Plumbing ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// One OidcClient per resource. With Variant B (one authorization server per API)
+    /// One OidcClient per resource. Under Variant B (one authorization server per API)
     /// each resource has its own issuer, so clients are not interchangeable (README §5.2).
     /// </summary>
     private OidcClient ClientFor(ResourceOptions resource)

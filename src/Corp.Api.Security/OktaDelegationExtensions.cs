@@ -42,8 +42,30 @@ public static class OktaDelegationExtensions
         services.AddMemoryCache();
         services.AddSingleton(okta);
 
-        if (OperatingSystem.IsWindows())
+        var identity = okta.Service
+            ?? throw new InvalidOperationException(
+                "Okta:Service is not configured. This API needs its own client identity to " +
+                "call another API (README §5.3, §6.6).");
+
+        services.AddSingleton(identity);
+
+        // A blank thumbprint selects the development factory, which refuses to be used
+        // against anything but a loopback endpoint (README §6.6).
+        if (string.IsNullOrWhiteSpace(identity.SigningCertificateThumbprint))
+        {
+            services.AddSingleton<IClientAssertionFactory, NullClientAssertionFactory>();
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            services.AddSingleton<ISigningCertificateProvider, StoreSigningCertificateProvider>();
             services.AddSingleton<IClientAssertionFactory, X509ClientAssertionFactory>();
+        }
+        else
+        {
+            throw new PlatformNotSupportedException(
+                "Certificate-based client authentication is implemented against the Windows " +
+                "certificate store. Implement ISigningCertificateProvider for other platforms.");
+        }
 
         services.AddHttpClient<IOktaTokenService, OktaTokenService>();
         services.AddTransient<DelegationDepthHandler>();

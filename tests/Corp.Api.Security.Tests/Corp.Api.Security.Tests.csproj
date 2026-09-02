@@ -12,6 +12,7 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.22.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="xunit" Version="2.5.3" />
@@ -24,7 +25,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Corp.Api.Security\Corp.Api.Security.csproj" />
-    <ProjectReference Include="..\..\src\ApiA\ApiA.csproj" />
+    <ProjectReference Include="..\..\tools\DevIdp\DevIdp.csproj" />
+    <ProjectReference Include="..\..\src\ApiA\ApiA.csproj" Aliases="ApiAHost" />
+    <ProjectReference Include="..\..\src\ApiB\ApiB.csproj" Aliases="ApiBHost" />
   </ItemGroup>
 
 </Project>

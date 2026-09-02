@@ -1,11 +1,13 @@
 using System.Net.Http;
 using System.Windows;
+using AppB.Modules;
 using AppB.Views;
 using Corp.Identity.Client;
 using Corp.Identity.Shell;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Prism.Ioc;
+using Prism.Modularity;
 using Velopack;
 
 namespace AppB;
@@ -50,7 +52,14 @@ public partial class App
             interactionFactory: () => new WpfUserInteraction(ShellViewModel.Instance));
 
         registry.RegisterSingleton<IApiClient, ApiClient>();
-        registry.RegisterForNavigation<HomeView, HomeViewModel>();
+    }
+
+    protected override void ConfigureModuleCatalog(IModuleCatalog catalog)
+    {
+        // Authentication loads first and unconditionally; feature modules load on demand
+        // after sign-in, so they may assume an authenticated user (README §8.11).
+        catalog.AddModule<AuthenticationModule>(InitializationMode.WhenAvailable);
+        catalog.AddModule<BillingModule>(InitializationMode.OnDemand);
     }
 
     /// <summary>
@@ -95,8 +104,9 @@ public partial class App
 
             Container.Resolve<SessionExpiryNotifier>().Start();
 
-            Container.Resolve<Prism.Regions.IRegionManager>()
-                     .RequestNavigate(RegionNames.Main, nameof(HomeView));
+            // Load the feature module now that a user is signed in. Its OnInitialized
+            // performs the guarded navigation.
+            Container.Resolve<IModuleManager>().LoadModule(nameof(BillingModule));
         }
         catch (Exception ex)
         {
@@ -132,11 +142,31 @@ public sealed class ApiClient : IApiClient
     {
         var resource = options.Value.PrimaryResource;
 
-        // The token handler sits in front of the transport, so nothing above this line
-        // ever sees a token (README §8.10).
+        // Handler chain, outermost first:
+        //   OktaTokenHandler        -> Authorization: Bearer <token for ApiB>
+        //   DownstreamTokenHandler  -> X-Downstream-Authorization: Bearer <token for ApiB>
+        //
+        // The second is the CLIENT half of §7 Pattern 3. It is harmless under Pattern 1
+        // (ApiB simply ignores the extra header), so both patterns work without a
+        // rebuild. It is registered only when a second resource is configured — see
+        // Okta:Resources in appsettings (README §7.3, §8.9).
+        HttpMessageHandler inner = new HttpClientHandler();
+
+        var downstream = options.Value.Resources.Keys
+            .FirstOrDefault(name => !string.Equals(name, resource.Name, StringComparison.Ordinal));
+
+        if (downstream is not null)
+        {
+            inner = new DownstreamTokenHandler(
+                auth, downstream, loggerFactory.CreateLogger<DownstreamTokenHandler>())
+            {
+                InnerHandler = inner,
+            };
+        }
+
         var handler = new OktaTokenHandler(auth, resource.Name, loggerFactory.CreateLogger<OktaTokenHandler>())
         {
-            InnerHandler = new HttpClientHandler(),
+            InnerHandler = inner,
         };
 
         _http = new HttpClient(handler)

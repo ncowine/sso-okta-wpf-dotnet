@@ -20,3 +20,10 @@ appsettings.Local.json
 
 ## Local environment overrides that may contain a real tenant's values
 launchSettings.local.json
+
+## Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.tfplan

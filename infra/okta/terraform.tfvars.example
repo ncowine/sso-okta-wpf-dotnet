@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+# Prefer the OKTA_API_TOKEN environment variable for the token.
+
+org_name = "dev-12345678"
+base_url = "okta.com"
+
+# api_token = "..."   # better: export OKTA_API_TOKEN=...
+
+# Optional — see variables.tf. Omit to paste public keys by hand instead.
+# apia_jwks_uri = "https://apia.contoso.internal/.well-known/jwks.json"
+# apib_jwks_uri = "https://apib.contoso.internal/.well-known/jwks.json"
