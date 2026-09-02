@@ -14,6 +14,10 @@
 
 ---
 
+> **New to OAuth and OpenID Connect?** Start with [GUIDE.md](GUIDE.md) — a ground-up walkthrough
+> that builds the mental model, gets the demo running, and explains why each decision was made.
+> This document is the reference specification; the guide is the way in.
+
 ## Table of contents
 
 **Part I — Understand**
