@@ -1087,19 +1087,28 @@ public sealed class DelegationDepthHandler : DelegatingHandler
 ```
 SSO.sln
 ├── src/
-│   ├── Corp.Identity.Client/          ← shared, referenced by both apps
+│   ├── Corp.Identity.Core/            ← shared; Microsoft packages only, no UI framework
 │   │   ├── IAuthenticationService.cs
 │   │   ├── OktaAuthenticationService.cs
-│   │   ├── LoopbackBrowser.cs
 │   │   ├── DpapiTokenStore.cs
 │   │   ├── AccessTokenCache.cs
 │   │   ├── OktaTokenHandler.cs
-│   │   └── OktaClientOptions.cs
-│   ├── Corp.Identity.Prism/           ← Prism + Telerik integration
-│   │   ├── AuthenticationModule.cs
-│   │   ├── AuthenticationNavigationGuard.cs
-│   │   ├── TelerikDialogWindow.cs
+│   │   ├── OktaClientOptions.cs
+│   │   ├── IdentityServiceCollectionExtensions.cs   ← AddCorpIdentity, the entry point
+│   │   └── Protocol/                  ← the OIDC flow itself
+│   │       ├── OpenIdConnectClient.cs
+│   │       ├── LoopbackListener.cs
+│   │       ├── IdentityTokenValidator.cs
+│   │       └── Pkce.cs
+│   ├── Corp.Identity.Wpf/             ← WPF only: dialogs, busy, focus, crash handling
+│   │   ├── IUserInteraction.cs
+│   │   ├── WpfUserInteraction.cs
+│   │   ├── TelerikUserInteraction.cs
 │   │   └── SessionExpiryNotifier.cs
+│   ├── Corp.Identity.Prism/           ← OPTIONAL; the only third-party dependency
+│   │   ├── AuthenticationModule.cs
+│   │   ├── Authorization.cs           ← RequiresScope, AuthenticationNavigationGuard
+│   │   └── PrismIdentityExtensions.cs
 │   ├── AppA/                          ← thin: shell, modules, views
 │   ├── AppB/
 │   ├── Corp.Api.Security/             ← shared, referenced by both APIs
@@ -1131,7 +1140,26 @@ SSO.sln
 
 > ⚠️ **The package was renamed.** `IdentityModel.OidcClient` and `IdentityModel` are gone from NuGet; they are now `Duende.IdentityModel.OidcClient` and `Duende.IdentityModel`. Older guides (and earlier drafts of this one) still cite the old names, which no longer resolve. The namespaces moved with them: `Duende.IdentityModel.OidcClient`, `Duende.IdentityModel.OidcClient.Browser`.
 
-**Why Duende's OidcClient rather than the Okta .NET SDK:** the Okta client SDKs are thin wrappers over the same standards. Using the standards library directly means the code is portable to any OIDC provider, the samples in RFCs apply verbatim, and you can read exactly what is on the wire. Okta's own .NET guidance points at standard JWT validation for the API side ([JWT validation guide](https://developer.okta.com/code/dotnet/jwt-validation/)).
+> **The implementation in this repository no longer uses OidcClient.** `Corp.Identity.Core`
+> now speaks the protocol directly on `Microsoft.IdentityModel.Protocols.OpenIdConnect`,
+> so the desktop stack has no dependency published by anyone but Microsoft — the packages
+> are `Microsoft.IdentityModel.Protocols.OpenIdConnect`,
+> `Microsoft.IdentityModel.JsonWebTokens`, `Microsoft.Extensions.*` and
+> `System.Security.Cryptography.ProtectedData`. That matters where a third-party
+> dependency needs sign-off before it can ship, and it is not a large amount of code:
+> `ConfigurationManager<OpenIdConnectConfiguration>` supplies discovery, JWKS caching and
+> key-rollover refresh, leaving PKCE, `state`/`nonce`, and the authorize/token/refresh
+> calls — see `src/Corp.Identity.Core/Protocol/`.
+>
+> Okta publishes no OIDC client for .NET desktop at all: `Okta.AspNetCore` and
+> `Okta.AspNet` are server-side middleware, `Okta.Sdk` is the management API, and
+> `Okta.Xamarin` is mobile-only. There is no Okta-native option for WPF to choose.
+>
+> **The sections below still describe the OidcClient implementation.** They remain a
+> correct account of the protocol and of what a library-based version looks like; where
+> they differ from the code, the code in `Protocol/` is what runs.
+
+**Why a standards library rather than the Okta .NET SDK:** the Okta client SDKs are thin wrappers over the same standards. Using the standards library directly means the code is portable to any OIDC provider, the samples in RFCs apply verbatim, and you can read exactly what is on the wire. Okta's own .NET guidance points at standard JWT validation for the API side ([JWT validation guide](https://developer.okta.com/code/dotnet/jwt-validation/)).
 
 ### 8.3 The contract
 

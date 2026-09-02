@@ -1,5 +1,6 @@
 using System.Text.Json;
-using Corp.Identity.Shell;
+using Corp.Identity.Prism;
+using Corp.Identity.Wpf;
 using Prism.Commands;
 using Prism.Mvvm;
 

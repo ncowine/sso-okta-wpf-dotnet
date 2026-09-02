@@ -5,7 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Corp.Identity.Client;
+namespace Corp.Identity;
 
 public interface ITokenStore
 {
@@ -52,7 +52,7 @@ public sealed record StoredTokens
 [SupportedOSPlatform("windows")]
 public sealed class DpapiTokenStore : ITokenStore
 {
-    private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Corp.Identity.Client.v1");
+    private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Corp.Identity.v1");
 
     private readonly string _path;
     private readonly bool _persist;

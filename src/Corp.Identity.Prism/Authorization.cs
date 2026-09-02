@@ -1,8 +1,9 @@
 using System.Reflection;
-using Corp.Identity.Client;
+using Corp.Identity;
+using Corp.Identity.Wpf;
 using Prism.Regions;
 
-namespace Corp.Identity.Shell;
+namespace Corp.Identity.Prism;
 
 /// <summary>
 /// Marks a view as requiring one or more scopes before it may be navigated to.

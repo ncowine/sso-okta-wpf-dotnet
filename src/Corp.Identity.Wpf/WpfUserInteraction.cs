@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace Corp.Identity.Shell;
+namespace Corp.Identity.Wpf;
 
 /// <summary>
 /// Plain-WPF implementation. Always available, no licence required. README §8.12.
@@ -11,14 +11,20 @@ namespace Corp.Identity.Shell;
 /// </remarks>
 public sealed class WpfUserInteraction : IUserInteraction
 {
-    private readonly IBusyHost _busyHost;
+    private readonly Func<IBusyHost?> _busyHost;
 
-    public WpfUserInteraction(IBusyHost busyHost) => _busyHost = busyHost;
+    /// <param name="busyHost">
+    /// Resolved lazily, per call. The shell view model takes <see cref="IUserInteraction"/>
+    /// in its own constructor, so at the moment this type is built the view model does not
+    /// exist yet — passing the instance eagerly captures null and the first
+    /// <see cref="ShowBusy"/> throws.
+    /// </param>
+    public WpfUserInteraction(Func<IBusyHost?> busyHost) => _busyHost = busyHost;
 
     public IDisposable ShowBusy(string message)
     {
-        Dispatch(() => _busyHost.SetBusy(true, message));
-        return new BusyScope(() => Dispatch(() => _busyHost.SetBusy(false, null)));
+        Dispatch(() => _busyHost()?.SetBusy(true, message));
+        return new BusyScope(() => Dispatch(() => _busyHost()?.SetBusy(false, null)));
     }
 
     public Task AlertAsync(string title, string message)
@@ -41,7 +47,7 @@ public sealed class WpfUserInteraction : IUserInteraction
     }
 
     public void Notify(string title, string message) =>
-        Dispatch(() => _busyHost.SetNotification($"{title} — {message}"));
+        Dispatch(() => _busyHost()?.SetNotification($"{title} — {message}"));
 
     public void RestoreFocus() => Dispatch(() =>
     {

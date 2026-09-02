@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>12</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!--
+    OPTIONAL. The only project in the identity stack with a third-party
+    dependency. A WPF application that does not use Prism references
+    Corp.Identity.Core and Corp.Identity.Wpf and never sees this assembly.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Prism.DryIoc" Version="8.1.97" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Corp.Identity.Core\Corp.Identity.Core.csproj" />
+    <ProjectReference Include="..\Corp.Identity.Wpf\Corp.Identity.Wpf.csproj" />
+  </ItemGroup>
+
+</Project>

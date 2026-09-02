@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Corp.Identity</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    Every dependency here is published by Microsoft (owner: AzureAD, Microsoft).
+    There is no third-party package in this project, and no UI framework — nothing
+    references WPF, Prism, or any DI container beyond the Microsoft abstractions.
+    That is deliberate: this assembly is the one another team can take without a
+    third-party review.
+
+    net8.0-windows rather than net8.0 because of DPAPI (ProtectedData) and
+    HttpListener's loopback bind. Both are Windows-only by nature; the desktop
+    threat model in README §8.6 assumes Windows.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.22.0" />
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.22.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The protocol types are internal: they are an implementation detail, not surface
+         another team should bind to. The tests still need them, because they are the
+         security-critical part. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Corp.Identity.Core.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

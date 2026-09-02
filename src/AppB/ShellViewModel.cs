@@ -1,6 +1,7 @@
 using System.Windows;
-using Corp.Identity.Client;
-using Corp.Identity.Shell;
+using Corp.Identity;
+using Corp.Identity.Prism;
+using Corp.Identity.Wpf;
 using Prism.Commands;
 using Prism.Mvvm;
 

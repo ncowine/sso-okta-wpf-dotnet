@@ -1,4 +1,4 @@
-namespace Corp.Identity.Client;
+namespace Corp.Identity;
 
 /// <summary>
 /// Configuration for a public (desktop) OAuth client. README §8.4.
@@ -17,14 +17,25 @@ public sealed class OktaClientOptions
     /// <summary>Used to name the on-disk token store. One store per application.</summary>
     public string ApplicationName { get; set; } = "App";
 
-    /// <summary>Standard OIDC scopes requested on every sign-in.</summary>
-    public string[] Scopes { get; set; } = ["openid", "profile", "email", "offline_access"];
+    /// <summary>
+    /// Standard OIDC scopes requested on every sign-in. Empty by default and supplied
+    /// entirely from configuration: the binder APPENDS to an array that already has
+    /// elements rather than replacing it, so a default here would survive into every
+    /// deployment as leading entries nobody configured.
+    /// </summary>
+    public string[] Scopes { get; set; } = [];
 
     /// <summary>
     /// Loopback ports to try in order. EVERY port here must also be registered as a
     /// redirect URI in Okta (README §4.3, §6.5), or the authorize request is rejected.
     /// </summary>
-    public int[] RedirectPorts { get; set; } = [8765, 8766, 8767];
+    /// <remarks>
+    /// No default, deliberately: the configuration binder appends to a non-empty array
+    /// instead of replacing it, so a default would stay at index 0 and every application
+    /// would bind the SAME first port regardless of its own settings — AppB would try
+    /// AppA's port, and Okta would reject the redirect URI it is not registered for.
+    /// </remarks>
+    public int[] RedirectPorts { get; set; } = [];
 
     public string RedirectPath { get; set; } = "/callback";
 
@@ -56,6 +67,11 @@ public sealed class OktaClientOptions
         if (string.IsNullOrWhiteSpace(ClientId) || ClientId.Contains("REPLACE", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
                 "Okta:ClientId is not configured. Fill in the values from README Appendix B.");
+
+        if (Scopes.Length == 0)
+            throw new InvalidOperationException(
+                "Okta:Scopes must list the OIDC scopes to request, e.g. openid, profile, " +
+                "email, offline_access (README Appendix B).");
 
         if (RedirectPorts.Length == 0)
             throw new InvalidOperationException("Okta:RedirectPorts must contain at least one port.");

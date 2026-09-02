@@ -2,8 +2,9 @@ using System.Net.Http;
 using System.Windows;
 using AppB.Modules;
 using AppB.Views;
-using Corp.Identity.Client;
-using Corp.Identity.Shell;
+using Corp.Identity;
+using Corp.Identity.Prism;
+using Corp.Identity.Wpf;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Prism.Ioc;
@@ -46,10 +47,14 @@ public partial class App
                          optional: true)
             .Build();
 
+        // One call wires the whole identity stack: options, token store, access-token
+        // cache, the protocol client, the WPF interaction surface, and a named HttpClient
+        // per resource with tokens attached. README §8.11.
         registry.RegisterIdentity(
             configuration,
             ApplicationName,
-            interactionFactory: () => new WpfUserInteraction(ShellViewModel.Instance));
+            busyHost: () => ShellViewModel.Instance,
+            "ApiB");
 
         registry.RegisterSingleton<IApiClient, ApiClient>();
     }
@@ -73,6 +78,12 @@ public partial class App
 
         var auth = Container.Resolve<IAuthenticationService>();
         var interaction = Container.Resolve<IUserInteraction>();
+
+        // Every ICommand handler in a WPF/MVVM application is effectively async void, so
+        // anything escaping one reaches DispatcherUnhandledException. With no handler the
+        // process exits with code 0 and leaves no trace at all.
+        this.UseCrashReporting(
+            Container.Resolve<ILoggerFactory>().CreateLogger<App>(), interaction);
 
         try
         {
@@ -131,58 +142,26 @@ public interface IApiClient
     Task<string> GetAsync(string path, CancellationToken ct = default);
 }
 
-public sealed class ApiClient : IApiClient
+public sealed class ApiClient(IHttpClientFactory httpClientFactory) : IApiClient
 {
-    private readonly HttpClient _http;
-
-    public ApiClient(
-        IAuthenticationService auth,
-        Microsoft.Extensions.Options.IOptions<OktaClientOptions> options,
-        ILoggerFactory loggerFactory)
-    {
-        var resource = options.Value.PrimaryResource;
-
-        // Handler chain, outermost first:
-        //   OktaTokenHandler        -> Authorization: Bearer <token for ApiB>
-        //   DownstreamTokenHandler  -> X-Downstream-Authorization: Bearer <token for ApiB>
-        //
-        // The second is the CLIENT half of §7 Pattern 3. It is harmless under Pattern 1
-        // (ApiB simply ignores the extra header), so both patterns work without a
-        // rebuild. It is registered only when a second resource is configured — see
-        // Okta:Resources in appsettings (README §7.3, §8.9).
-        HttpMessageHandler inner = new HttpClientHandler();
-
-        var downstream = options.Value.Resources.Keys
-            .FirstOrDefault(name => !string.Equals(name, resource.Name, StringComparison.Ordinal));
-
-        if (downstream is not null)
-        {
-            inner = new DownstreamTokenHandler(
-                auth, downstream, loggerFactory.CreateLogger<DownstreamTokenHandler>())
-            {
-                InnerHandler = inner,
-            };
-        }
-
-        var handler = new OktaTokenHandler(auth, resource.Name, loggerFactory.CreateLogger<OktaTokenHandler>())
-        {
-            InnerHandler = inner,
-        };
-
-        _http = new HttpClient(handler)
-        {
-            BaseAddress = new Uri(resource.BaseAddress),
-            Timeout = TimeSpan.FromSeconds(30),
-        };
-    }
+    /// <summary>
+    /// The logical resource name registered by <c>AddCorpApiClient</c>. The base address,
+    /// the bearer token, the single refresh-and-retry on 401, and the §7 Pattern 3
+    /// downstream header are all attached by that registration — this type only issues
+    /// requests (README §8.10).
+    /// </summary>
+    private const string Resource = "ApiB";
 
     public async Task<string> GetAsync(string path, CancellationToken ct = default)
     {
-        using var response = await _http.GetAsync(path, ct);
+        var http = httpClientFactory.CreateClient(Resource);
+
+        using var response = await http.GetAsync(path, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
 
         return response.IsSuccessStatusCode
             ? body
-            : $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}\n\n{body}";
+            : $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}" +
+              Environment.NewLine + Environment.NewLine + body;
     }
 }

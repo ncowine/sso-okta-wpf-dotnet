@@ -2,7 +2,7 @@
 using System.Windows;
 using Telerik.Windows.Controls;
 
-namespace Corp.Identity.Shell;
+namespace Corp.Identity.Wpf;
 
 /// <summary>
 /// Telerik implementation. Compiled ONLY when built with <c>-p:UseTelerik=true</c>,
@@ -13,13 +13,13 @@ namespace Corp.Identity.Shell;
 /// set the theme before any window is created:
 /// <code>StyleManager.ApplicationTheme = new FluentTheme();</code>
 /// </remarks>
-public sealed class TelerikUserInteraction(IBusyHost busyHost) : IUserInteraction
+public sealed class TelerikUserInteraction(Func<IBusyHost?> busyHost) : IUserInteraction
 {
     public IDisposable ShowBusy(string message)
     {
         // Bound to RadBusyIndicator.IsBusy / BusyContent in the shell (see ShellWindow).
-        Dispatch(() => busyHost.SetBusy(true, message));
-        return new BusyScope(() => Dispatch(() => busyHost.SetBusy(false, null)));
+        Dispatch(() => busyHost()?.SetBusy(true, message));
+        return new BusyScope(() => Dispatch(() => busyHost()?.SetBusy(false, null)));
     }
 
     public Task AlertAsync(string title, string message)

@@ -1,8 +1,9 @@
-using Corp.Identity.Client;
+using Corp.Identity;
+using Corp.Identity.Wpf;
 using Prism.Ioc;
 using Prism.Modularity;
 
-namespace Corp.Identity.Shell;
+namespace Corp.Identity.Prism;
 
 /// <summary>
 /// Loads the identity stack as a Prism module. README §8.11.

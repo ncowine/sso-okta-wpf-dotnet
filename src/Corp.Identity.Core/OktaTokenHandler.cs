@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using Microsoft.Extensions.Logging;
 
-namespace Corp.Identity.Client;
+namespace Corp.Identity;
 
 /// <summary>
 /// Attaches a bearer token to outbound calls, so view models and repositories stay

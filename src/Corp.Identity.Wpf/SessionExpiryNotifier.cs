@@ -1,8 +1,8 @@
-using Corp.Identity.Client;
+using Corp.Identity;
 using Microsoft.Win32;
 using System.Windows.Threading;
 
-namespace Corp.Identity.Shell;
+namespace Corp.Identity.Wpf;
 
 /// <summary>
 /// Warns before the session lapses, and re-checks it after the machine wakes.

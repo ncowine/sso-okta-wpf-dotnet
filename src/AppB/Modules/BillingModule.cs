@@ -1,6 +1,7 @@
 using AppB.Views;
-using Corp.Identity.Client;
-using Corp.Identity.Shell;
+using Corp.Identity;
+using Corp.Identity.Prism;
+using Corp.Identity.Wpf;
 using Prism.Ioc;
 using Prism.Regions;
 

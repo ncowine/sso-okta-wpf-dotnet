@@ -1,4 +1,4 @@
-namespace Corp.Identity.Shell;
+namespace Corp.Identity.Wpf;
 
 /// <summary>
 /// The shell surface the authentication layer needs, kept behind an abstraction so the

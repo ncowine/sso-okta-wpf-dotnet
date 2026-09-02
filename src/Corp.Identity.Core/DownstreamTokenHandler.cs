@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace Corp.Identity.Client;
+namespace Corp.Identity;
 
 /// <summary>
 /// The CLIENT half of §7 Pattern 3: acquires a second access token addressed to a

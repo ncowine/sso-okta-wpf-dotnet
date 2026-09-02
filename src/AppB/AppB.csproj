@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -16,12 +16,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Corp.Identity.Client\Corp.Identity.Client.csproj" />
-    <ProjectReference Include="..\Corp.Identity.Shell\Corp.Identity.Shell.csproj" />
+    <ProjectReference Include="..\Corp.Identity.Core\Corp.Identity.Core.csproj" />
+    <ProjectReference Include="..\Corp.Identity.Prism\Corp.Identity.Prism.csproj" />
+    <ProjectReference Include="..\Corp.Identity.Wpf\Corp.Identity.Wpf.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="appsettings.json">
+    <None Update="appsettings*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

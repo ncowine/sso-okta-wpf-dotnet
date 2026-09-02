@@ -1,7 +1,7 @@
 using System.Security.Claims;
 using Microsoft.IdentityModel.JsonWebTokens;
 
-namespace Corp.Identity.Client;
+namespace Corp.Identity;
 
 /// <summary>
 /// Builds a <see cref="ClaimsPrincipal"/> from an ID token for UI display. README §3.2.

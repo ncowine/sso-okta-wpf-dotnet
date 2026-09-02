@@ -1,6 +1,6 @@
 using System.Security.Claims;
 
-namespace Corp.Identity.Client;
+namespace Corp.Identity;
 
 /// <summary>
 /// Everything the rest of the application knows about authentication. README §8.3.

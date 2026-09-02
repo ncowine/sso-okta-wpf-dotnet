@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace Corp.Identity.Client;
+namespace Corp.Identity;
 
 public interface IAccessTokenCache
 {

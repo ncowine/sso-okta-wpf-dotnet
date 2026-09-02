@@ -14,15 +14,18 @@ section by number.
 ```
 SSO.sln
 ├── src/
-│   ├── Corp.Identity.Client/     Shared desktop auth: PKCE, loopback, DPAPI, refresh
-│   ├── Corp.Identity.Shell/      Prism modules + shell abstractions (plain WPF / Telerik)
+│   ├── Corp.Identity.Core/       Desktop auth: PKCE, loopback, DPAPI, refresh. No UI
+│   │                             framework, no third-party package — Microsoft only
+│   ├── Corp.Identity.Wpf/        Dialogs, busy overlay, focus, crash handling. No Prism
+│   ├── Corp.Identity.Prism/      OPTIONAL Prism glue: module, navigation guard
 │   ├── Corp.Api.Security/        Shared API auth: validation + §7 delegation patterns
 │   ├── AppA/  AppB/              WPF clients (.NET 8, Prism 8, Velopack)
 │   └── ApiA/  ApiB/              ASP.NET Core APIs that call each other, both directions
 ├── tools/
 │   └── DevIdp/                   Local stand-in for Okta — run everything with no tenant
 ├── tests/
-│   └── Corp.Api.Security.Tests/  Negative token tests, CI guards, end-to-end delegation
+│   ├── Corp.Api.Security.Tests/  Negative token tests, CI guards, end-to-end delegation
+│   └── Corp.Identity.Core.Tests/ PKCE vectors, port failover, ID token rejection cases
 ├── infra/okta/                   Terraform for the real tenant
 └── build/
     ├── publish.ps1               Velopack packaging
@@ -30,6 +33,23 @@ SSO.sln
 ```
 
 Both WPF apps share one authentication library; both APIs share one security library.
+
+### Hosting the identity stack in another application
+
+`Corp.Identity.Core` is standalone and has no dependency outside Microsoft's own packages
+(`Microsoft.IdentityModel.Protocols.OpenIdConnect`, `Microsoft.Extensions.*`,
+`System.Security.Cryptography.ProtectedData`). Any WPF application wires it up with:
+
+```csharp
+services.AddCorpIdentity(configuration, applicationName: "AppA", WpfIdentityExtensions.FocusRestorer);
+services.AddCorpIdentityWpf(() => ShellViewModel.Instance);
+services.AddCorpApiClient("ApiA");     // named HttpClient, tokens attached
+```
+
+A Prism host calls `registry.RegisterIdentity(configuration, "AppA", busyHost, "ApiA", "ApiB")`
+instead, which composes exactly the same stack and hands the singletons to Prism.
+`Corp.Identity.Prism` is the only assembly with a third-party dependency; an application
+that does not use Prism never references it.
 Nothing is duplicated — divergent copies of auth code become a security bug in whichever
 copy gets less attention (README §8.1).
 
@@ -239,15 +259,15 @@ It writes to `HKCU`, so it needs no elevation either.
 
 The shell talks to `IUserInteraction`, which has two implementations. `WpfUserInteraction`
 (plain WPF) is used today; `TelerikUserInteraction` is compiled only under the `TELERIK`
-symbol. Nothing outside `Corp.Identity.Shell` references either, so switching is a one-line
+symbol. Nothing outside `Corp.Identity.Wpf` references either, so switching is a one-line
 registration change.
 
 Once your licensed Telerik feed is configured:
 
-1. Add the Telerik packages to `AppA`, `AppB` and `Corp.Identity.Shell`.
+1. Add the Telerik packages to `AppA`, `AppB` and `Corp.Identity.Wpf`.
 2. Build with `-p:UseTelerik=true`, or set `<UseTelerik>true</UseTelerik>` in
    `Directory.Build.props`.
-3. In `App.xaml.cs`, swap the factory to `new TelerikUserInteraction(ShellViewModel.Instance)`.
+3. In `App.xaml.cs`, swap the factory to `new TelerikUserInteraction(() => ShellViewModel.Instance)`.
 4. Replace the busy overlay in `ShellWindow.xaml` with a `RadBusyIndicator` wrapping the
    region (README §8.12).
 
