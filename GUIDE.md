@@ -101,6 +101,15 @@ know what the caller may do, so they consume OAuth access tokens.
 > including a perfectly valid, correctly signed token addressed to a *different* API, and
 > including an ID token. This one rule prevents an entire class of privilege escalation, and it
 > is one boolean away from being switched off.
+>
+> This is not a house style. [RFC 9700 §2.3](https://datatracker.ietf.org/doc/html/rfc9700#section-2.3)
+> states it normatively:
+>
+> > "\[…\] every resource server is obliged to verify, for every request, whether the access token
+> > sent with that request was meant to be used for that particular resource server. If it was
+> > not, the resource server **MUST** refuse to serve the respective request."
+>
+> Keep that sentence to hand. Most of §9 follows from it.
 
 ### Who trusts whom
 
@@ -286,9 +295,19 @@ window. It is the wrong choice, for three compounding reasons:
 - **The application can read the credentials.** The host process can inspect the DOM of a WebView
   it owns — precisely the property the authorization code flow exists to avoid.
 
-This is not a preference; it is the standing recommendation of
-[RFC 8252, *OAuth 2.0 for Native Apps*](https://datatracker.ietf.org/doc/html/rfc8252), which is
-short and is the single best citation when someone proposes the WebView.
+**This is not a preference, and you do not have to argue it on your own authority.**
+[RFC 8252 §5](https://datatracker.ietf.org/doc/html/rfc8252#section-5) is unambiguous:
+
+> "To conform to this best practice, native apps **MUST** use an external user-agent to perform
+> OAuth authorization requests."
+
+And [§8.12](https://datatracker.ietf.org/doc/html/rfc8252#section-8.12) states the prohibition
+directly — "native apps **MUST NOT** use embedded user-agents to perform authorization requests" —
+then gives the reasoning: an embedded user-agent lets the host application "record every keystroke
+entered in the login form to capture usernames and passwords, automatically submit forms to bypass
+user consent, and copy session cookies."
+
+RFC 8252 is short. Read it once; it settles this conversation permanently.
 
 ### Why loopback, not a custom URI scheme
 
@@ -299,12 +318,27 @@ The alternative to `http://127.0.0.1:8765/callback` is registering a custom sche
 > **Any other installed application can register the same scheme.** On Windows the last writer
 > wins, and there is no way for your application to detect it has happened or to prevent it. A
 > malicious or merely careless installer can silently intercept your OAuth callback — with the
-> authorization code in it. Loopback cannot be hijacked this way, because binding a port is
-> exclusive and fails loudly if something else holds it.
+> authorization code in it.
+>
+> [RFC 8252 §7.1](https://datatracker.ietf.org/doc/html/rfc8252#section-7.1) names the problem:
+> "a limitation of using private-use URI schemes for redirect URIs is that multiple apps can
+> typically register the same scheme, which makes it indeterminate as to which app will receive
+> the authorization code."
+>
+> Loopback cannot be hijacked this way, because binding a port is exclusive and fails loudly if
+> something else holds it.
 
-Loopback also needs no registry writes, no elevation, and no URL ACL: `HttpListener` binds a high
-port on `127.0.0.1` as the interactive user. This surprises people who assume desktop OAuth
-requires an installer step. It does not.
+Loopback redirection is specified in
+[RFC 8252 §7.3](https://datatracker.ietf.org/doc/html/rfc8252#section-7.3). It needs no registry
+writes, no elevation, and no URL ACL: `HttpListener` binds a high port on `127.0.0.1` as the
+interactive user. This surprises people who assume desktop OAuth requires an installer step. It
+does not.
+
+One detail worth noting, because it looks like a typo and is not:
+[§8.3](https://datatracker.ietf.org/doc/html/rfc8252#section-8.3) recommends the **IP literal**
+`127.0.0.1` rather than the name `localhost`, to "avoid inadvertently listening on network
+interfaces other than the loopback interface". That is why every redirect URI in this repository —
+and in `infra/okta/main.tf` — is written `http://127.0.0.1:8765/callback`.
 
 ### The details that bite
 
@@ -339,6 +373,11 @@ The `state` parameter is your CSRF defence. It must be compared **before** the c
 the query, so an unsolicited redirect is discarded rather than processed and then questioned. The
 `nonce` is separate and does a different job: it binds the ID token to this specific authorize
 request, so a token captured from another flow cannot be replayed into this one.
+
+[RFC 9700 §2.1](https://datatracker.ietf.org/doc/html/rfc9700#section-2.1) makes this mandatory:
+"Clients **MUST** prevent Cross-Site Request Forgery"; where PKCE is not being relied on for it,
+"one-time use CSRF tokens carried in the `state` parameter that are securely bound to the user
+agent MUST be used." 
 
 #### Validate the ID token properly
 
@@ -399,8 +438,13 @@ writing one to disk adds a bearer credential at rest and buys nothing.
 
 ### Rotation, and the trap it sets
 
-With rotation enabled — and you should enable it — each refresh returns a *new* refresh token and
-invalidates the old one. Presenting an already-rotated token is treated as evidence of theft, and
+Rotation is not optional for an application like this one.
+[RFC 9700 §2.2.2](https://datatracker.ietf.org/doc/html/rfc9700#section-2.2.2): "Refresh tokens for
+public clients **MUST** be sender-constrained or use refresh token rotation." A desktop app is a
+public client, and we are not sender-constraining yet (see the DPoP note in §10), so rotation is
+the requirement we are meeting.
+
+With rotation enabled, each refresh returns a *new* refresh token and invalidates the old one. Presenting an already-rotated token is treated as evidence of theft, and
 Okta can invalidate the entire token family.
 
 That is a good security property and a loaded gun pointed at your own application, because a WPF
@@ -492,9 +536,15 @@ then returns `null` — silently. If that lookup was feeding an authorization de
 quietly changes.
 
 **`ValidAlgorithms`** — Without pinning, a token declaring `"alg": "none"` or an HMAC algorithm may
-be considered. The classic attack takes a public RSA key, uses it as an HMAC secret, and signs a
-forged token — the library verifies with the same public key and accepts it. Pinning to `RS256`
-closes the whole family of confusion attacks.
+be considered. The classic attack takes the server's *public* RSA key — a published value — uses it
+as an HMAC secret, and signs a forged token; a validator that reads `alg` from the token itself then
+verifies with that same public key and accepts it. The attacker mints a valid token for any identity
+using only public information.
+
+[RFC 8725, *JSON Web Token Best Current Practices*](https://datatracker.ietf.org/doc/html/rfc8725),
+exists largely because of this family of attacks, and its remedy is exactly what the code does:
+reject any token whose header algorithm is not on an application-defined allowlist, rather than
+deriving trust from the token's own content.
 
 **`ClockSkew`** — The library default is five minutes. With 15-minute access tokens that is a third
 of the lifetime added on. Thirty seconds is right, and requires that your API hosts actually run
@@ -526,6 +576,14 @@ Alice and Bob both hold `apia.read`. They see different orders. If your authoriz
 scope check, every user with the scope sees everything — exactly the bug the demo's Alice/Bob split
 exists to make visible.
 
+This has a name and a rank. It is
+[API1:2023 Broken Object Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/),
+the **number one** entry in the OWASP API Security Top 10, whose remedy is that "every API endpoint
+that receives an ID of an object, and performs any action on the object, should implement
+object-level authorization checks". The scope check alone is
+[API5:2023](https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/)
+territory — function-level only.
+
 > [!WARNING]
 > Put a **filtered** groups claim in the token — only the groups relevant to this application. An
 > unfiltered claim in a large directory produces tokens that blow past proxy and IIS header limits,
@@ -546,7 +604,56 @@ the user's identity, and with it every authorization decision downstream.
 | **4 · Shared audience** | The user | Rarely. Collapses two APIs into one trust boundary. |
 
 The tempting fifth option is to forward ApiA's own token to ApiB unchanged. It requires no new
-configuration and appears to work immediately. It is the anti-pattern.
+configuration and appears to work immediately. It is the anti-pattern — and since this is the claim
+you are most likely to be challenged on, here is how to prove it rather than assert it.
+
+### Proving it, not asserting it
+
+No RFC contains the sentence "do not forward tokens." The prohibition is **structural**, and the
+argument is stronger for it. Follow it in three steps:
+
+**Step 1 — For forwarding to work, ApiB must accept a token addressed to ApiA.** That is simply
+what forwarding *is*. The token's `aud` claim says `api://apia`.
+
+**Step 2 — A resource server is required to refuse exactly that.**
+[RFC 9700 §2.3](https://datatracker.ietf.org/doc/html/rfc9700#section-2.3):
+
+> "\[…\] every resource server is obliged to verify, for every request, whether the access token
+> sent with that request was meant to be used for that particular resource server. If it was not,
+> the resource server **MUST** refuse to serve the respective request."
+
+So forwarding does not merely smell wrong. **It requires the receiving API to violate a MUST.**
+There is no configuration of ApiB that both accepts a forwarded token and conforms to the BCP.
+
+**Step 3 — The IETF specifies what to do instead.**
+[RFC 8693 §1](https://datatracker.ietf.org/doc/html/rfc8693#section-1) describes this exact
+situation as the motivation for token exchange:
+
+> "An OAuth resource server, for example, might assume the role of the client during token exchange
+> in order to trade an access token that it received in a protected resource request for a new
+> token that is appropriate to include in a call to a backend service."
+
+[§1.1](https://datatracker.ietf.org/doc/html/rfc8693#section-1.1) then gives you the vocabulary that
+wins design reviews. **Impersonation** is when "A is given all the rights that B has \[…\] and is
+indistinguishable from B in that context" — which is what forwarding produces. **Delegation** is
+when "principal A still has its own identity separate from B, and it is explicitly understood that
+while B may have delegated some of its rights to A, any actions taken are being taken by A
+representing B." The `act` (actor) claim, defined in
+[§4.1](https://datatracker.ietf.org/doc/html/rfc8693#section-4.1), is what records the acting party
+— the machine-readable difference between the two.
+
+If you want a source that names the anti-pattern in so many words, the Model Context Protocol
+[security best practices](https://modelcontextprotocol.io/specification/draft/basic/security_best_practices)
+calls it **"token passthrough"** and forbids it with a MUST NOT, for the same audience-validation
+reason. Different domain, identical argument — useful corroboration that this is a recognised named
+failure and not a local opinion.
+
+The underlying idea predates OAuth by two decades. Norm Hardy, "The Confused Deputy (or why
+capabilities might have been invented)", *ACM SIGOPS Operating Systems Review* 22(4), October 1988,
+pp. 36–38 ([doi:10.1145/54289.871709](https://doi.org/10.1145/54289.871709)) describes a program
+with high privilege being induced to misuse its authority on behalf of a lower-privileged caller.
+The [summary on Wikipedia](https://en.wikipedia.org/wiki/Confused_deputy_problem) is enough for a
+review; naming the problem tends to end the discussion faster than any diagram.
 
 ```mermaid
 flowchart TB
@@ -705,19 +812,24 @@ dependency; an application that does not use Prism never references it.
 Each of these is something a competent developer proposes in good faith, usually while debugging
 something else. Knowing the counter-argument is what makes you useful in review.
 
-| ✕ | Anti-pattern | Why it is wrong |
-|---|---|---|
-| 1 | **`ValidateAudience = false`** | Almost always done to make a 401 go away. It makes your API accept any token the issuer ever minted, including tokens for other APIs and ID tokens. The 401 was correct; the token was addressed elsewhere. |
-| 2 | **Resource Owner Password grant** | Defeats MFA, defeats federation, trains users to type corporate credentials into arbitrary windows, and is formally removed in OAuth 2.1. |
-| 3 | **Embedding a WebView for sign-in** | Loses the session cookie and therefore all SSO, breaks federated and MFA flows, and lets the host process read the credentials. RFC 8252 exists largely to say this. |
-| 4 | **Forwarding ApiA's token to ApiB** | Requires ApiB to accept a foreign audience and destroys its ability to authorize the user independently. The confused deputy, implemented deliberately. |
-| 5 | **Client-credentials token for a user request** | The service token carries the union of what every user could do. The user's own permissions are never consulted, so every user silently gains the service's authority. |
-| 6 | **Sharing one token cache between AppA and AppB** | A compromise of the less-important application yields tokens for the more-important one, and revocation becomes meaningless. Separate stores, keyed by client id. |
-| 7 | **Refreshing without serialising** | Concurrent refreshes with a rotating refresh token look like replay, which can revoke the entire family. Users get signed out at random, under load, irreproducibly. |
-| 8 | **Trusting client-side scope checks** | `[RequiresScope]` on a view is UX: it stops someone opening a screen they cannot use. A modified client, or curl, bypasses it entirely. Every rule enforced in the UI must be enforced again in the API. |
-| 9 | **Logging tokens, or echoing them into errors** | A token in a log is a credential in a log, with a different retention policy and a much wider audience. Log the failure reason and a trace id. |
-| 10 | **Leaving `ClockSkew` at five minutes** | A third of a 15-minute token's life spent accepting expired tokens. Set it to 30 seconds and run NTP. |
-| 11 | **An unfiltered groups claim** | In a large directory it produces tokens that exceed proxy and IIS header limits — appearing as an unexplained 400 from infrastructure, not from your code — and it leaks your org structure to every API. |
+**Every row cites a source.** Where the source is normative it is quoted; where the objection is
+operational rather than specified, the table says so plainly rather than dressing an opinion up as
+a standard. Being able to tell those two apart is most of what makes the argument credible.
+
+| ✕ | Anti-pattern | Why it is wrong | Authority |
+|---|---|---|---|
+| 1 | **`ValidateAudience = false`** | Almost always done to make a 401 go away. It makes your API accept any token the issuer ever minted, including tokens for other APIs and ID tokens. The 401 was correct; the token was addressed elsewhere. | [RFC 9700 §2.3](https://datatracker.ietf.org/doc/html/rfc9700#section-2.3) — the resource server "**MUST** refuse to serve the respective request" |
+| 2 | **Resource Owner Password grant** | Defeats MFA, defeats federation, and trains users to type corporate credentials into arbitrary windows. | [RFC 9700 §2.4](https://datatracker.ietf.org/doc/html/rfc9700#section-2.4) — "**MUST NOT** be used"; also omitted entirely from [OAuth 2.1](https://oauth.net/2.1/) |
+| 3 | **Embedding a WebView for sign-in** | Loses the session cookie and therefore all SSO, breaks federated and MFA flows, and lets the host process read every keystroke. | [RFC 8252 §5](https://datatracker.ietf.org/doc/html/rfc8252#section-5) — "**MUST** use an external user-agent"; [§8.12](https://datatracker.ietf.org/doc/html/rfc8252#section-8.12) — "**MUST NOT** use embedded user-agents" |
+| 4 | **Forwarding ApiA's token to ApiB** | Requires ApiB to accept a foreign audience and destroys its ability to authorize the user independently. | Structural: forwarding requires the receiver to violate [RFC 9700 §2.3](https://datatracker.ietf.org/doc/html/rfc9700#section-2.3). Prescribed alternative: [RFC 8693 §1](https://datatracker.ietf.org/doc/html/rfc8693#section-1). Named "token passthrough" and forbidden in the [MCP security BCP](https://modelcontextprotocol.io/specification/draft/basic/security_best_practices). Full argument in §7. |
+| 5 | **Client-credentials token for a user request** | The service token carries the union of what every user could do. The user's own permissions are never consulted, so every user silently gains the service's authority. | [RFC 8693 §1.1](https://datatracker.ietf.org/doc/html/rfc8693#section-1.1) — the impersonation/delegation distinction; [OWASP API5:2023](https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/) |
+| 6 | **Sharing one token cache between AppA and AppB** | A compromise of the less-important application yields tokens for the more-important one, and revocation becomes meaningless. Separate stores, keyed by client id. | Operational, not specified. The supporting principle is audience restriction ([RFC 9700 §2.3](https://datatracker.ietf.org/doc/html/rfc9700#section-2.3)): separate clients are meant to hold separate credentials. |
+| 7 | **Refreshing without serialising** | Concurrent refreshes with a rotating refresh token look like replay, which can revoke the entire family. Users get signed out at random, under load, irreproducibly. | Follows from the rotation requirement in [RFC 9700 §2.2.2](https://datatracker.ietf.org/doc/html/rfc9700#section-2.2.2). The concurrency bug itself is ours to avoid — no RFC will do it for you. |
+| 8 | **Trusting client-side scope checks** | `[RequiresScope]` on a view is UX: it stops someone opening a screen they cannot use. A modified client, or curl, bypasses it entirely. | [OWASP API1:2023](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/) and [API5:2023](https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/) — the #1 and #5 API risks |
+| 9 | **Logging tokens, or echoing them into errors** | A token in a log is a credential in a log, with a different retention policy and a much wider audience. Log the failure reason and a trace id. | [RFC 9700 §4.3.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.3.2) bans tokens in URLs for the same reason — they end up in logs and history. |
+| 10 | **Leaving `ClockSkew` at five minutes** | A third of a 15-minute token's life spent accepting expired tokens. Set it to 30 seconds and run NTP. | Operational. The library default, not a specified value — `exp` is defined in [RFC 7519 §4.1.4](https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.4), which permits "some small leeway" only. |
+| 11 | **An unfiltered groups claim** | In a large directory it produces tokens that exceed proxy and IIS header limits — appearing as an unexplained 400 from infrastructure, not from your code — and it leaks your org structure to every API. | Operational. Minimising claim content is the disclosure half of [RFC 8725](https://datatracker.ietf.org/doc/html/rfc8725) practice. |
+| 12 | **Accepting whatever `alg` the token declares** | Take the published RSA public key, use it as an HMAC secret, sign a forged token — a validator that trusts the header's `alg` verifies it with that same public key and accepts it. | [RFC 8725](https://datatracker.ietf.org/doc/html/rfc8725) — use an application-defined algorithm allowlist, never the token's own claim |
 
 ---
 
@@ -781,6 +893,13 @@ Being able to name the gaps is as useful as defending the choices.
 Primary sources, so every claim here can be checked against a specification or vendor documentation
 rather than taken on trust.
 
+**How to read the citations.** An RFC marked BCP (Best Current Practice) — 8252, 8725, 9700 — carries
+normative MUST/SHOULD language and is what to quote in a design review. A Standards Track RFC —
+6749, 7636, 8693 — defines the mechanism but often leaves the security advice to the BCP. Where this
+guide makes a claim that no specification supports, it says so and calls the reasoning operational.
+Do not overstate a citation in review: "RFC 9700 §2.3 says the resource server MUST refuse it" is
+persuasive precisely because it is checkable.
+
 ### Specifications — the authoritative layer
 
 | | | |
@@ -792,7 +911,10 @@ rather than taken on trust.
 | RFC 8693 | [OAuth 2.0 Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693) | The On-Behalf-Of pattern in §7. |
 | RFC 7519 | [JSON Web Token](https://datatracker.ietf.org/doc/html/rfc7519) | Claim definitions — `aud`, `exp`, `nbf`, `sub`. |
 | RFC 7009 | [Token Revocation](https://datatracker.ietf.org/doc/html/rfc7009) | Why a revocation endpoint returns 200 for an already-invalid token. |
-| RFC 9700 | [OAuth 2.0 Security Best Current Practice](https://datatracker.ietf.org/doc/html/rfc9700) | The consolidated modern guidance. If you read one document after this one, read this. |
+| RFC 9700 | [OAuth 2.0 Security Best Current Practice](https://datatracker.ietf.org/doc/html/rfc9700) | **The most useful single document here.** §2.1 CSRF, §2.2.2 refresh rotation, §2.3 audience restriction, §2.4 the ROPC prohibition, §4.3.2 tokens in URLs. Most of §9 cites it. |
+| RFC 8725 | [JSON Web Token Best Current Practices](https://datatracker.ietf.org/doc/html/rfc8725) | Algorithm confusion, `alg: none`, and the allowlist remedy behind `ValidAlgorithms`. |
+| RFC 9068 | [JWT Profile for OAuth 2.0 Access Tokens](https://datatracker.ietf.org/doc/html/rfc9068) | The claim structure of an access token, including how `aud` is used to audience-restrict it. |
+| OAuth 2.1 | [oauth.net/2.1](https://oauth.net/2.1/) | Consolidation in progress. Omits the implicit grant, ROPC, and bearer tokens in query strings. |
 | OIDC Core 1.0 | [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html) | ID tokens, `nonce`, `prompt=none` and the `login_required` response. |
 
 ### Okta documentation
@@ -818,8 +940,9 @@ rather than taken on trust.
 
 | | | |
 |---|---|---|
-| OWASP | [JSON Web Token cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html) | Algorithm confusion and the `alg: none` family, which is why `ValidAlgorithms` is pinned. |
-| Concept | [The confused deputy problem](https://en.wikipedia.org/wiki/Confused_deputy_problem) | The 1988 framing of the delegation anti-pattern in §7. Useful vocabulary in a design review. |
+| OWASP | [API Security Top 10 (2023)](https://owasp.org/API-Security/editions/2023/en/0x11-t10/) | API1 object-level and API5 function-level authorization — the two failures behind "scopes are not sufficient" in §6. |
+| Paper | Norm Hardy, "The Confused Deputy", *ACM SIGOPS OSR* 22(4), 1988 — [doi:10.1145/54289.871709](https://doi.org/10.1145/54289.871709) · [summary](https://en.wikipedia.org/wiki/Confused_deputy_problem) | The original framing of the delegation anti-pattern in §7. Naming it tends to end the argument. |
+| BCP | [MCP security best practices](https://modelcontextprotocol.io/specification/draft/basic/security_best_practices) | A recent specification that names "token passthrough" explicitly and forbids it. Different domain, identical reasoning — useful corroboration. |
 
 ---
 
