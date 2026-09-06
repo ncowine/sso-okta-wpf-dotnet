@@ -8,17 +8,19 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
+  <!--
+    Microsoft packages only. No MVVM framework, no DI container library, nothing that
+    needs a third-party review before it can ship.
+  -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
-    <PackageReference Include="Prism.DryIoc" Version="8.1.97" />
-    <PackageReference Include="Velopack" Version="1.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Corp.Identity.Core\Corp.Identity.Core.csproj" />
-    <ProjectReference Include="..\Corp.Identity.Prism\Corp.Identity.Prism.csproj" />
-    <ProjectReference Include="..\Corp.Identity.Wpf\Corp.Identity.Wpf.csproj" />
+    <ProjectReference Include="..\Common.Authentication\Common.Authentication.csproj" />
   </ItemGroup>
 
   <ItemGroup>

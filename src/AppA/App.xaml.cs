@@ -1,167 +1,123 @@
-using System.Net.Http;
 using System.Windows;
-using AppA.Modules;
-using AppA.Views;
-using Corp.Identity;
-using Corp.Identity.Prism;
-using Corp.Identity.Wpf;
+using Common.Authentication;
+using Common.Authentication.Callback;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Prism.Ioc;
-using Prism.Modularity;
-using Velopack;
 
 namespace AppA;
 
 /// <summary>
-/// AppA bootstrapper. README §8.11.
+/// Everything this application does at startup, in the order it does it.
 /// </summary>
-public partial class App
+/// <remarks>
+/// Plain WPF and Microsoft dependency injection — no MVVM framework, no container
+/// library. The whole of authentication is one call to <c>AddCommonAuthentication</c>.
+/// </remarks>
+public partial class App : Application
 {
-    private const string ApplicationName = "AppA";
+    private ServiceProvider? _services;
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        // Velopack must run before ANY other startup work: on the very first run after
-        // an install or update it performs the hook (shortcuts, Add/Remove Programs
-        // entry, version swap) and exits the process. Anything above this line would
-        // execute during install. See build/publish.ps1 and DEMO.md.
-        VelopackApp.Build().Run();
-
-#if TELERIK
-        Telerik.Windows.Controls.StyleManager.ApplicationTheme =
-            new Telerik.Windows.Controls.FluentTheme();
-#endif
+        // FIRST. Windows delivers a private-use-scheme callback by starting a second copy
+        // of this executable with the URI as an argument. If that is why we are running,
+        // hand it to the instance that is waiting and stop here.
+        //
+        // Harmless when the redirect is a loopback address — no callback ever arrives this
+        // way, so it just claims the single-instance lock and returns.
+        if (PrivateUriSchemeActivation.ForwardToRunningInstance(e.Args, "appa"))
+        {
+            Shutdown();
+            return;
+        }
 
         base.OnStartup(e);
+
+        _services = BuildServices();
+
+        // Any exception that escapes a command handler lands here. Without this the
+        // process exits with code 0 and leaves nothing to diagnose.
+        InstallCrashReporting();
+
+        var shell = _services.GetRequiredService<ShellWindow>();
+        MainWindow = shell;
+        shell.Show();
+
+        // Sign-in is started after the window is up, so the user has something to look at
+        // while the browser opens. It cannot go in a view model constructor: constructors
+        // cannot await, and blocking on the result deadlocks the dispatcher.
+        _ = _services.GetRequiredService<ShellViewModel>().StartAsync();
     }
 
-    protected override Window CreateShell() => Container.Resolve<ShellWindow>();
-
-    protected override void RegisterTypes(IContainerRegistry registry)
+    private static ServiceProvider BuildServices()
     {
+        var environment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production";
+
         var configuration = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: false)
-            .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production"}.json",
-                         optional: true)
+            .AddJsonFile($"appsettings.{environment}.json", optional: true)
             .Build();
 
-        // One call wires the whole identity stack: options, token store, access-token
-        // cache, the protocol client, the WPF interaction surface, and a named HttpClient
-        // per resource with tokens attached. README §8.11.
-        registry.RegisterIdentity(
-            configuration,
-            ApplicationName,
-            busyHost: () => ShellViewModel.Instance,
-            "ApiA", "ApiB");
+        var services = new ServiceCollection();
 
-        registry.RegisterSingleton<IApiClient, ApiClient>();
-    }
-
-    protected override void ConfigureModuleCatalog(IModuleCatalog catalog)
-    {
-        // Authentication loads first and unconditionally; feature modules load on demand
-        // after sign-in, so they may assume an authenticated user (README §8.11).
-        catalog.AddModule<AuthenticationModule>(InitializationMode.WhenAvailable);
-        catalog.AddModule<OrdersModule>(InitializationMode.OnDemand);
-    }
-
-    /// <summary>
-    /// Sign-in happens here, not in a view model constructor: constructors cannot await,
-    /// so you would get either a deadlock from .Result or a fire-and-forget that renders
-    /// an unauthenticated shell for a few frames (README §8.11).
-    /// </summary>
-    protected override async void OnInitialized()
-    {
-        base.OnInitialized();
-
-        var auth = Container.Resolve<IAuthenticationService>();
-        var interaction = Container.Resolve<IUserInteraction>();
-
-        // Every ICommand handler in a WPF/MVVM application is effectively async void, so
-        // anything escaping one reaches DispatcherUnhandledException. With no handler the
-        // process exits with code 0 and leaves no trace at all.
-        this.UseCrashReporting(
-            Container.Resolve<ILoggerFactory>().CreateLogger<App>(), interaction);
-
-        try
+        services.AddLogging(logging =>
         {
-            AuthenticationResult result;
+            logging.AddConfiguration(configuration.GetSection("Logging"));
+            logging.AddDebug();
 
-            using (interaction.ShowBusy("Restoring your session…"))
-            {
-                result = await auth.TryRestoreSessionAsync();
-            }
+            // A WinExe has no console, so this is silent under a normal launch. It only
+            // produces output when stdout is redirected:
+            //     dotnet run --project src/AppA > appa.log 2>&1
+            // which is the quickest way to watch a sign-in actually happen.
+            logging.AddSimpleConsole(o => o.SingleLine = true);
+        });
 
-            if (!result.Succeeded)
-            {
-                using (interaction.ShowBusy("Complete sign-in in your browser, then return here."))
-                {
-                    result = await auth.SignInAsync();
-                }
-            }
+        // Options, token storage, the protocol client, the callback listener, and a named
+        // HttpClient per configured API with its token attached. That is the whole of it.
+        services.AddCommonAuthentication(configuration);
 
-            if (!result.Succeeded)
-            {
-                await interaction.AlertAsync(
-                    "Sign-in required",
-                    $"AppA could not sign you in and will close.\n\n" +
-                    $"Reason: {result.Error} {result.ErrorDescription}".TrimEnd());
+        services.AddSingleton<ShellViewModel>();
+        services.AddSingleton<OrdersViewModel>();
+        services.AddSingleton<ShellWindow>();
 
-                Current.Shutdown();
-                return;
-            }
-
-            Container.Resolve<SessionExpiryNotifier>().Start();
-
-            // Load the feature module now that a user is signed in. Its OnInitialized
-            // performs the guarded navigation.
-            Container.Resolve<IModuleManager>().LoadModule(nameof(OrdersModule));
-        }
-        catch (Exception ex)
-        {
-            Container.Resolve<ILoggerFactory>()
-                     .CreateLogger<App>()
-                     .LogCritical(ex, "Startup authentication failed");
-
-            await interaction.AlertAsync("Startup failed", ex.Message);
-            Current.Shutdown();
-        }
+        return services.BuildServiceProvider();
     }
-}
 
-public static class RegionNames
-{
-    public const string Main = "MainRegion";
-}
-
-/// <summary>Typed access to ApiA. Tokens are attached by <see cref="OktaTokenHandler"/>.</summary>
-public interface IApiClient
-{
-    Task<string> GetAsync(string path, CancellationToken ct = default);
-}
-
-public sealed class ApiClient(IHttpClientFactory httpClientFactory) : IApiClient
-{
-    /// <summary>
-    /// The logical resource name registered by <c>AddCorpApiClient</c>. The base address,
-    /// the bearer token, the single refresh-and-retry on 401, and the §7 Pattern 3
-    /// downstream header are all attached by that registration — this type only issues
-    /// requests (README §8.10).
-    /// </summary>
-    private const string Resource = "ApiA";
-
-    public async Task<string> GetAsync(string path, CancellationToken ct = default)
+    private void InstallCrashReporting()
     {
-        var http = httpClientFactory.CreateClient(Resource);
+        var log = _services!.GetRequiredService<ILoggerFactory>().CreateLogger<App>();
 
-        using var response = await http.GetAsync(path, ct);
-        var body = await response.Content.ReadAsStringAsync(ct);
+        DispatcherUnhandledException += (_, args) =>
+        {
+            log.LogCritical(args.Exception, "Unhandled exception on the UI thread");
 
-        return response.IsSuccessStatusCode
-            ? body
-            : $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}" +
-              Environment.NewLine + Environment.NewLine + body;
+            MessageBox.Show(
+                $"{args.Exception.Message}\n\nThe application will try to continue.",
+                "Something went wrong", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+            // Handled: one failed command must not take the application down.
+            args.Handled = true;
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            log.LogError(args.Exception, "Unobserved task exception");
+            args.SetObserved();
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            // Not cancellable — the process is going down. Logging here is the difference
+            // between a diagnosable crash and a window that simply vanishes.
+            log.LogCritical(args.ExceptionObject as Exception, "Fatal error; the process is ending");
+        };
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _services?.Dispose();
+        base.OnExit(e);
     }
 }

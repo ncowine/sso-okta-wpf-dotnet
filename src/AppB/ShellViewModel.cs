@@ -1,85 +1,173 @@
 using System.Windows;
-using Corp.Identity;
-using Corp.Identity.Prism;
-using Corp.Identity.Wpf;
-using Prism.Commands;
-using Prism.Mvvm;
+using Common.Authentication;
 
 namespace AppB;
 
-public sealed class ShellViewModel : BindableBase, IBusyHost
+/// <summary>
+/// The shell: who is signed in, whether we are busy, and the sign-out commands.
+/// </summary>
+/// <remarks>
+/// Note what this class does <i>not</i> contain. No tokens, no expiry arithmetic, no
+/// browser. It takes <see cref="IAuthenticationService"/>, listens for changes, and
+/// exposes properties the XAML can bind to. That is the whole of the integration.
+/// </remarks>
+public sealed class ShellViewModel : ObservableObject
 {
-    /// <summary>
-    /// Set during construction so <see cref="WpfUserInteraction"/> can drive the busy
-    /// overlay. A single shell means a single instance; this avoids a circular
-    /// registration between the view model and the interaction service.
-    /// </summary>
-    public static ShellViewModel Instance { get; private set; } = null!;
-
     private readonly IAuthenticationService _auth;
-    private readonly IUserInteraction _interaction;
+    private readonly BillingViewModel _billing;
 
     private bool _isBusy;
     private string _busyMessage = string.Empty;
     private string _signedInAs = "Not signed in";
-    private string _statusMessage = "Ready.";
+    private string _status = "Starting…";
 
-    public ShellViewModel(IAuthenticationService auth, IUserInteraction interaction)
+    public ShellViewModel(IAuthenticationService auth, BillingViewModel billing)
     {
         _auth = auth;
-        _interaction = interaction;
-        Instance = this;
+        _billing = billing;
 
-        SignOutLocalCommand = new DelegateCommand(async () => await SignOutAsync(SignOutScope.Local));
-        SignOutGlobalCommand = new DelegateCommand(async () => await SignOutAsync(SignOutScope.Global));
+        SignOutCommand = new AsyncCommand(
+            () => SignOutAsync(SignOutScope.Application),
+            () => _auth.IsSignedIn);
 
-        _auth.StateChanged += (_, e) =>
+        SignOutEverywhereCommand = new AsyncCommand(
+            () => SignOutAsync(SignOutScope.Everywhere),
+            () => _auth.IsSignedIn);
+
+        SignOutCommand.Faulted += ReportFault;
+        SignOutEverywhereCommand.Faulted += ReportFault;
+
+        // The service raises this from whatever thread finished the work, so everything
+        // bindable has to be set on the UI thread.
+        _auth.StateChanged += (_, e) => OnUiThread(() =>
         {
-            var subject = e.User?.FindFirst("preferred_username")?.Value
-                          ?? e.User?.FindFirst("email")?.Value
-                          ?? e.User?.FindFirst("sub")?.Value;
+            SignedInAs = e.User?.FindFirst("preferred_username")?.Value
+                         ?? e.User?.FindFirst("email")?.Value
+                         ?? e.User?.FindFirst("sub")?.Value
+                         ?? "Not signed in";
 
-            SignedInAs = subject is null ? "Not signed in" : $"Signed in as {subject}";
-            StatusMessage = $"{e.Reason} at {DateTime.Now:HH:mm:ss}";
-        };
+            Status = e.Reason switch
+            {
+                // The one the user did not ask for, and the only one worth interrupting
+                // them about.
+                AuthenticationChangeReason.SessionExpired =>
+                    "Your session ended. Please sign in again.",
+
+                AuthenticationChangeReason.SignedIn => "Signed in.",
+                AuthenticationChangeReason.SessionRestored => "Welcome back.",
+                AuthenticationChangeReason.SignedOut => "Signed out.",
+                _ => Status,
+            };
+
+            RefreshCommands();
+        });
     }
+
+    public BillingViewModel Billing => _billing;
 
     public bool IsBusy { get => _isBusy; private set => SetProperty(ref _isBusy, value); }
     public string BusyMessage { get => _busyMessage; private set => SetProperty(ref _busyMessage, value); }
     public string SignedInAs { get => _signedInAs; private set => SetProperty(ref _signedInAs, value); }
-    public string StatusMessage { get => _statusMessage; private set => SetProperty(ref _statusMessage, value); }
+    public string Status { get => _status; private set => SetProperty(ref _status, value); }
 
-    public DelegateCommand SignOutLocalCommand { get; }
-    public DelegateCommand SignOutGlobalCommand { get; }
+    public AsyncCommand SignOutCommand { get; }
+    public AsyncCommand SignOutEverywhereCommand { get; }
 
-    public void SetBusy(bool isBusy, string? message)
+    /// <summary>
+    /// Gets the user signed in. Called once, after the window is showing.
+    /// </summary>
+    /// <remarks>
+    /// Two attempts, and both are usually invisible. Restoring uses the refresh token
+    /// stored last time. Signing in tries <c>prompt=none</c> first, which succeeds without
+    /// a prompt whenever the user's browser already has a session with the provider —
+    /// which it will if they opened the web dashboard this morning.
+    /// </remarks>
+    public async Task StartAsync()
     {
-        IsBusy = isBusy;
-        BusyMessage = message ?? string.Empty;
-    }
+        using (Busy("Restoring your session…"))
+        {
+            var restored = await _auth.RestoreSessionAsync();
+            if (restored.Succeeded) return;
+        }
 
-    public void SetNotification(string message) => StatusMessage = message;
+        using (Busy("Complete sign-in in your browser, then come back here."))
+        {
+            var result = await _auth.SignInAsync();
+
+            if (!result.Succeeded)
+            {
+                Status = result.ToDisplayMessage();
+
+                MessageBox.Show(
+                    $"{result.ToDisplayMessage()}\n\nAppB will close.",
+                    "Sign-in required", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                Application.Current.Shutdown();
+            }
+        }
+    }
 
     private async Task SignOutAsync(SignOutScope scope)
     {
-        if (scope == SignOutScope.Global)
+        if (scope == SignOutScope.Everywhere)
         {
-            // Global sign-out from AppB signs the user out of AppB too. That is the
-            // correct meaning of SSO — one session, one sign-out — but it surprises
-            // users and will be reported as a bug unless you say so (README §11.2).
-            var confirmed = await _interaction.ConfirmAsync(
-                "Sign out of all applications?",
-                "This ends your Okta session. You will be signed out of AppB and every " +
-                "other Corp application, on this machine and any other browser session.");
+            // Worth asking. Signing out of everything is the correct meaning of single
+            // sign-out, and it is reported as a bug roughly every time it happens without
+            // warning.
+            var confirmed = MessageBox.Show(
+                "This ends your session with the identity provider, so you will be signed " +
+                "out of every other application too.\n\nContinue?",
+                "Sign out everywhere?",
+                MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
 
             if (!confirmed) return;
         }
 
-        using (_interaction.ShowBusy("Signing out…"))
+        using (Busy("Signing out…"))
         {
             await _auth.SignOutAsync(scope);
         }
 
-        if (scope == SignOutScope.Global) Application.Current.Shutdown();
+        if (scope == SignOutScope.Everywhere) Application.Current.Shutdown();
+    }
+
+    private void ReportFault(Exception ex) => OnUiThread(() => Status = ex.Message);
+
+    private void RefreshCommands()
+    {
+        SignOutCommand.RaiseCanExecuteChanged();
+        SignOutEverywhereCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>Shows the busy overlay until the returned scope is disposed.</summary>
+    private IDisposable Busy(string message)
+    {
+        OnUiThread(() =>
+        {
+            BusyMessage = message;
+            IsBusy = true;
+        });
+
+        return new BusyScope(() => OnUiThread(() => IsBusy = false));
+    }
+
+    private static void OnUiThread(Action action)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+
+        if (dispatcher is null || dispatcher.CheckAccess()) action();
+        else dispatcher.Invoke(action);
+    }
+
+    private sealed class BusyScope(Action onDispose) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            onDispose();
+        }
     }
 }

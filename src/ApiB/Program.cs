@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using Corp.Api.Security;
-using Corp.Api.Security.Delegation;
+using Common.Api.Security;
+using Common.Api.Security.Delegation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.Extensions.Options;

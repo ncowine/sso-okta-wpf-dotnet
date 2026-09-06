@@ -1,6 +1,6 @@
 using System.Net.Http.Json;
-using Corp.Api.Security;
-using Corp.Api.Security.Delegation;
+using Common.Api.Security;
+using Common.Api.Security.Delegation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 

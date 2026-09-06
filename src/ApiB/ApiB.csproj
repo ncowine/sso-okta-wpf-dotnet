@@ -11,7 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Corp.Api.Security\Corp.Api.Security.csproj" />
+    <ProjectReference Include="..\Common.Api.Security\Common.Api.Security.csproj" />
   </ItemGroup>
 
 </Project>

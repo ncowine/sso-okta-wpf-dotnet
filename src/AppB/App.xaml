@@ -1,8 +1,6 @@
-<prism:PrismApplication x:Class="AppB.App"
-                        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                        xmlns:prism="http://prismlibrary.com/"
-                        xmlns:sys="clr-namespace:System;assembly=mscorlib">
+<Application x:Class="AppB.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
         <ResourceDictionary>
             <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
@@ -15,7 +13,7 @@
 
             <Style TargetType="Button">
                 <Setter Property="Padding" Value="14,7" />
-                <Setter Property="Margin" Value="0,0,8,0" />
+                <Setter Property="Margin" Value="0,0,8,8" />
                 <Setter Property="MinWidth" Value="110" />
             </Style>
 
@@ -43,4 +41,4 @@
             </Style>
         </ResourceDictionary>
     </Application.Resources>
-</prism:PrismApplication>
+</Application>

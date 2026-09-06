@@ -10,7 +10,7 @@ the security properties you were trying to buy.
 > [!NOTE]
 > `README.md` is a 3,800-line reference. It is excellent for depth, but **sections 8.2 onward
 > still describe an earlier implementation** built on a third-party OIDC library that has since
-> been replaced. Where the two disagree, the code in `src/Corp.Identity.Core/Protocol/` is what
+> been replaced. Where the two disagree, the code in `src/Common.Authentication/Protocol/` is what
 > runs.
 
 ---
@@ -47,14 +47,15 @@ avoided.
 
 | Project | What it is |
 |---|---|
-| `Corp.Identity.Core` | The desktop auth stack. PKCE, the loopback listener, token storage, the HTTP handlers. **Microsoft packages only** — no third-party dependency. |
-| `Corp.Identity.Wpf` | Dialogs, the busy overlay, focus restoration, crash reporting. WPF only, no Prism. |
-| `Corp.Identity.Prism` | Optional Prism glue: the module, the navigation guard, `[RequiresScope]`. |
-| `Corp.Api.Security` | Shared API-side validation and the delegation patterns. |
-| `AppA`, `AppB` | The desktop clients. Deliberately thin. |
+| `Common.Authentication` | Everything needed to sign a user in: PKCE, callback handling, DPAPI storage, token attachment. No UI framework. |
+| `Common.Api.Security` | The other half — API-side token validation and the delegation patterns. |
+| `AppA`, `AppB` | The desktop clients. Plain WPF and MVVM, deliberately thin. |
 | `ApiA`, `ApiB` | The APIs that call each other, in both directions. |
 | `tools/DevIdp` | A local stand-in for Okta. **Development only** — it authenticates nobody. |
 | `infra/okta` | Terraform for the real tenant. |
+
+**Nine projects and no third-party packages.** Every dependency is published by Microsoft,
+so nothing here needs a third-party review before it can ship.
 
 ### How to use this document
 
@@ -264,7 +265,7 @@ editor. So it is registered as a *public client* — no secret at all — and PK
 secret used to do.
 
 ```csharp
-// src/Corp.Identity.Core/Protocol/Pkce.cs
+// src/Common.Authentication/Protocol/Pkce.cs
 
 // 32 bytes, base64url-encoded to 43 characters. RFC 7636 allows 43–128;
 // there is no benefit above 32 bytes of entropy.
@@ -349,7 +350,7 @@ That failover only works if the `redirect_uri` follows the port actually bound �
 registered port must also exist in Okta's redirect URI list, or the authorize request is rejected.
 
 ```csharp
-// src/Corp.Identity.Core/Protocol/LoopbackListener.cs
+// src/Common.Authentication/Protocol/LoopbackListener.cs
 foreach (var port in ports)
 {
     // A FRESH listener per attempt. HttpListener disposes itself when Start()
@@ -385,7 +386,7 @@ Signature, issuer, audience, lifetime **and** nonce. Audience is the one people 
 one that matters most.
 
 ```csharp
-// src/Corp.Identity.Core/Protocol/IdentityTokenValidator.cs
+// src/Common.Authentication/Protocol/IdentityTokenValidator.cs
 var parameters = new TokenValidationParameters
 {
     ValidIssuer = configuration.Issuer,
@@ -495,7 +496,7 @@ Client-side checks are user experience. The API is where security actually happe
 of it is in one options block.
 
 ```csharp
-// src/Corp.Api.Security/OktaAuthenticationExtensions.cs
+// src/Common.Api.Security/OktaAuthenticationExtensions.cs
 options.Authority = okta.Issuer;
 options.Audience  = okta.Audience;
 options.SaveToken = true;      // needed for On-Behalf-Of later
@@ -677,7 +678,7 @@ different, weaker security model wearing the same code. The formal name is the
 ### How the exchange looks on the wire
 
 ```csharp
-// src/Corp.Api.Security/Delegation/OktaTokenService.cs
+// src/Common.Api.Security/Delegation/OktaTokenService.cs
 var form = new Dictionary<string, string>
 {
     ["grant_type"]         = "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -766,17 +767,21 @@ established — but the code must handle it, which is why `GetAccessTokenAsync` 
 ```jsonc
 // src/AppA/appsettings.json
 {
-  "Okta": {
-    "Domain": "dev-12345678.okta.com",
-    "ClientId": "0oa1a2b3c4d5e6f7g8h9",
-    "Scopes": [ "openid", "profile", "email", "offline_access" ],
-    "RedirectPorts": [ 8765, 8766, 8767 ],
+  "Authentication": {
+    // The FULL issuer of your custom authorization server, including the aus... id.
+    "Authority":   "https://dev-12345678.okta.com/oauth2/aus1a2b3c4d5e6f7g8h9",
+    "ClientId":    "0oa1a2b3c4d5e6f7g8h9",
+
+    // Must match a redirect URI registered on the Okta app exactly.
+    "RedirectUri": "myapp://auth/callback",
+
+    // offline_access is what earns a refresh token.
+    "Scopes":      [ "openid", "profile", "email", "offline_access" ],
+
     "Resources": {
-      "ApiA": {
-        "AuthorizationServerId": "aus1a2b3c4d5e6f7g8h9",
-        "Audience": "api://apia",
-        "Scopes": [ "apia.read", "apia.write" ],
-        "BaseAddress": "https://apia.corp.example/"
+      "Orders": {
+        "Scopes":      [ "orders.read", "orders.write" ],
+        "BaseAddress": "https://orders.corp.example/"
       }
     }
   }
@@ -785,25 +790,33 @@ established — but the code must handle it, which is why `GetAccessTokenAsync` 
 
 > [!WARNING]
 > **A .NET configuration trap.** The configuration binder **appends** to an array that already has
-> elements rather than replacing it. If `RedirectPorts` had a default of `[8765, 8766, 8767]` on the
-> property, AppB's configured `[8865, 8866, 8867]` would bind as all six — with AppA's first. AppB
-> would then advertise a redirect URI registered to a *different* Okta client, and Okta would reject
-> the authorize request. Intermittently, since it only shows when the port is contended.
+> elements rather than replacing it. Give `Scopes` a sensible-looking default on the property and every
+> deployment silently carries those entries in front of whatever was configured. For anything
+> order-sensitive — a list of redirect ports, say — that means the wrong value ends up first, and
+> the provider rejects a request you can see is correct in the config file.
 >
 > Leave collection properties empty and let configuration be authoritative. There is a regression
-> test for this in `OktaClientOptionsTests`.
+> test for this in `AuthenticationOptionsTests`.
 
 ### Hosting the auth stack in a new application
 
 ```csharp
-services.AddCorpIdentity(configuration, "AppA", WpfIdentityExtensions.FocusRestorer);
-services.AddCorpIdentityWpf(() => ShellViewModel.Instance);
-services.AddCorpApiClient("ApiA");   // named HttpClient, tokens attached
+// Composition root — this is the whole of it.
+services.AddCommonAuthentication(configuration);
+
+// App.xaml.cs, first line, if your redirect is a private-use scheme.
+// Windows delivers the callback by starting a SECOND copy of your exe; this hands
+// the URI to the instance that is waiting and stops.
+if (PrivateUriSchemeActivation.ForwardToRunningInstance(e.Args, "myapp")) { Shutdown(); return; }
+
+// Anywhere you call an API — no token in sight.
+var http = httpClients.CreateClient("Orders");
 ```
 
-A Prism host calls `registry.RegisterIdentity(...)` instead, which composes the same service
-collection and hands the singletons to Prism. Only `Corp.Identity.Prism` carries a third-party
-dependency; an application that does not use Prism never references it.
+Both redirect styles work. `myapp://auth/callback` registers a scheme with Windows and
+forwards between processes; `http://127.0.0.1:8765/callback` binds a port. You configure one
+`RedirectUri` and the library picks the machinery. See
+[`src/Common.Authentication/README.md`](src/Common.Authentication/README.md).
 
 ---
 
@@ -825,7 +838,7 @@ a standard. Being able to tell those two apart is most of what makes the argumen
 | 5 | **Client-credentials token for a user request** | The service token carries the union of what every user could do. The user's own permissions are never consulted, so every user silently gains the service's authority. | [RFC 8693 §1.1](https://datatracker.ietf.org/doc/html/rfc8693#section-1.1) — the impersonation/delegation distinction; [OWASP API5:2023](https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/) |
 | 6 | **Sharing one token cache between AppA and AppB** | A compromise of the less-important application yields tokens for the more-important one, and revocation becomes meaningless. Separate stores, keyed by client id. | Operational, not specified. The supporting principle is audience restriction ([RFC 9700 §2.3](https://datatracker.ietf.org/doc/html/rfc9700#section-2.3)): separate clients are meant to hold separate credentials. |
 | 7 | **Refreshing without serialising** | Concurrent refreshes with a rotating refresh token look like replay, which can revoke the entire family. Users get signed out at random, under load, irreproducibly. | Follows from the rotation requirement in [RFC 9700 §2.2.2](https://datatracker.ietf.org/doc/html/rfc9700#section-2.2.2). The concurrency bug itself is ours to avoid — no RFC will do it for you. |
-| 8 | **Trusting client-side scope checks** | `[RequiresScope]` on a view is UX: it stops someone opening a screen they cannot use. A modified client, or curl, bypasses it entirely. | [OWASP API1:2023](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/) and [API5:2023](https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/) — the #1 and #5 API risks |
+| 8 | **Trusting client-side scope checks** | A scope check in the UI is UX: it stops someone opening a screen they cannot use. A modified client, or curl, bypasses it entirely. | [OWASP API1:2023](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/) and [API5:2023](https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/) — the #1 and #5 API risks |
 | 9 | **Logging tokens, or echoing them into errors** | A token in a log is a credential in a log, with a different retention policy and a much wider audience. Log the failure reason and a trace id. | [RFC 9700 §4.3.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.3.2) bans tokens in URLs for the same reason — they end up in logs and history. |
 | 10 | **Leaving `ClockSkew` at five minutes** | A third of a 15-minute token's life spent accepting expired tokens. Set it to 30 seconds and run NTP. | Operational. The library default, not a specified value — `exp` is defined in [RFC 7519 §4.1.4](https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.4), which permits "some small leeway" only. |
 | 11 | **An unfiltered groups claim** | In a large directory it produces tokens that exceed proxy and IIS header limits — appearing as an unexplained 400 from infrastructure, not from your code — and it leaks your org structure to every API. | Operational. Minimising claim content is the disclosure half of [RFC 8725](https://datatracker.ietf.org/doc/html/rfc8725) practice. |
@@ -862,7 +875,7 @@ handled in one method.
 **"Why is there so much code for something Okta should do for us?"**
 Okta issues and validates tokens. It cannot decide which records a user may see, cannot serialise
 your refresh calls, and cannot stop your API accepting a token addressed to someone else.
-Everything in `Corp.Identity.Core` and `Corp.Api.Security` is the part that is necessarily yours.
+Everything in `Common.Authentication` and `Common.Api.Security` is the part that is necessarily yours.
 
 **"Users say they get signed out every morning."**
 Check the Global Session Policy for "persist session cookie across browser restarts" before looking

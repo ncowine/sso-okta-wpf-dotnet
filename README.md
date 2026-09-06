@@ -1,11 +1,11 @@
 # Enterprise SSO with Okta — A Production Guide for .NET 8 WPF + ASP.NET Core
 
-**Reference architecture:** two Prism/Telerik WPF desktop clients (`AppA`, `AppB`), two ASP.NET Core APIs (`ApiA`, `ApiB`) that call each other, one Okta tenant.
+**Reference architecture:** two WPF desktop clients (`AppA`, `AppB`), two ASP.NET Core APIs (`ApiA`, `ApiB`) that call each other, one Okta tenant.
 
 | | |
 |---|---|
 | **Identity Provider** | Okta (Identity Engine), Custom Authorization Server |
-| **Desktop clients** | .NET 8 · WPF · Prism 8 (DryIoc) · Telerik UI for WPF |
+| **Desktop clients** | .NET 8 · WPF · plain MVVM · Microsoft packages only |
 | **Services** | .NET 8 · ASP.NET Core · hosted on IIS (Windows) |
 | **User sign-in** | OAuth 2.0 Authorization Code + PKCE, system browser, loopback redirect |
 | **Cross-app SSO** | Okta browser session (primary) · Okta Native SSO (Appendix A) |
@@ -14,9 +14,18 @@
 
 ---
 
-> **New to OAuth and OpenID Connect?** Start with [GUIDE.md](GUIDE.md) — a ground-up walkthrough
+> **New to OAuth and OpenID Connect? Start with [GUIDE.md](GUIDE.md)**, a ground-up walkthrough
 > that builds the mental model, gets the demo running, and explains why each decision was made.
-> This document is the reference specification; the guide is the way in.
+>
+> **On this document's accuracy.** Parts I and II — the protocol foundations, the Okta tenant
+> design, the delegation patterns — remain correct, as do the appendices with their raw HTTP
+> transcripts. **The code samples from §8.2 onward do not match the repository.** They describe an
+> implementation built on a third-party OIDC library and a Prism shell, with Telerik as an
+> option. All three are gone: the desktop stack is now `src/Common.Authentication/`, which
+> depends on nothing outside Microsoft's own packages, and the sample applications are plain
+> WPF with no MVVM framework. The layout in §8.1 has been corrected; the sections after it are
+> kept as a record of the design reasoning, not as a description of the code. Read this
+> document for the design; read [GUIDE.md](GUIDE.md) and the source for what is built.
 
 ## Table of contents
 
@@ -1091,33 +1100,17 @@ public sealed class DelegationDepthHandler : DelegatingHandler
 ```
 SSO.sln
 ├── src/
-│   ├── Corp.Identity.Core/            ← shared; Microsoft packages only, no UI framework
-│   │   ├── IAuthenticationService.cs
-│   │   ├── OktaAuthenticationService.cs
-│   │   ├── DpapiTokenStore.cs
-│   │   ├── AccessTokenCache.cs
-│   │   ├── OktaTokenHandler.cs
-│   │   ├── OktaClientOptions.cs
-│   │   ├── IdentityServiceCollectionExtensions.cs   ← AddCorpIdentity, the entry point
-│   │   └── Protocol/                  ← the OIDC flow itself
-│   │       ├── OpenIdConnectClient.cs
-│   │       ├── LoopbackListener.cs
-│   │       ├── IdentityTokenValidator.cs
-│   │       └── Pkce.cs
-│   ├── Corp.Identity.Wpf/             ← WPF only: dialogs, busy, focus, crash handling
-│   │   ├── IUserInteraction.cs
-│   │   ├── WpfUserInteraction.cs
-│   │   ├── TelerikUserInteraction.cs
-│   │   └── SessionExpiryNotifier.cs
-│   ├── Corp.Identity.Prism/           ← OPTIONAL; the only third-party dependency
-│   │   ├── AuthenticationModule.cs
-│   │   ├── Authorization.cs           ← RequiresScope, AuthenticationNavigationGuard
-│   │   └── PrismIdentityExtensions.cs
-│   ├── AppA/                          ← thin: shell, modules, views
-│   ├── AppB/
-│   ├── Corp.Api.Security/             ← shared, referenced by both APIs
-│   ├── ApiA/
-│   └── ApiB/
+│   ├── Common.Authentication/         ← desktop sign-in; Microsoft packages only
+│   │   ├── IAuthenticationService.cs  ← the only type an application references
+│   │   ├── AuthenticationOptions.cs
+│   │   ├── AuthenticationService.cs
+│   │   ├── Protocol/                  ← PKCE, the OIDC calls, ID token validation
+│   │   ├── Callback/                  ← private-use scheme AND loopback
+│   │   ├── Storage/                   ← DPAPI refresh token, access token cache
+│   │   └── Http/                      ← attaches the bearer, retries once on 401
+│   ├── Common.Api.Security/           ← shared, referenced by both APIs
+│   ├── AppA/  AppB/                   ← plain WPF and MVVM, no framework
+│   ├── ApiA/  ApiB/
 └── tests/
 ```
 
@@ -1144,7 +1137,7 @@ SSO.sln
 
 > ⚠️ **The package was renamed.** `IdentityModel.OidcClient` and `IdentityModel` are gone from NuGet; they are now `Duende.IdentityModel.OidcClient` and `Duende.IdentityModel`. Older guides (and earlier drafts of this one) still cite the old names, which no longer resolve. The namespaces moved with them: `Duende.IdentityModel.OidcClient`, `Duende.IdentityModel.OidcClient.Browser`.
 
-> **The implementation in this repository no longer uses OidcClient.** `Corp.Identity.Core`
+> **The implementation in this repository no longer uses OidcClient.** `Common.Authentication`
 > now speaks the protocol directly on `Microsoft.IdentityModel.Protocols.OpenIdConnect`,
 > so the desktop stack has no dependency published by anyone but Microsoft — the packages
 > are `Microsoft.IdentityModel.Protocols.OpenIdConnect`,
@@ -1153,7 +1146,7 @@ SSO.sln
 > dependency needs sign-off before it can ship, and it is not a large amount of code:
 > `ConfigurationManager<OpenIdConnectConfiguration>` supplies discovery, JWKS caching and
 > key-rollover refresh, leaving PKCE, `state`/`nonce`, and the authorize/token/refresh
-> calls — see `src/Corp.Identity.Core/Protocol/`.
+> calls — see `src/Common.Authentication/Protocol/`.
 >
 > Okta publishes no OIDC client for .NET desktop at all: `Okta.AspNetCore` and
 > `Okta.AspNet` are server-side middleware, `Okta.Sdk` is the management API, and

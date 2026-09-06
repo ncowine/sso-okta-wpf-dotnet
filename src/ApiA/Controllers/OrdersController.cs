@@ -1,5 +1,5 @@
 using System.Net.Http.Json;
-using Corp.Api.Security;
+using Common.Api.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -93,7 +93,7 @@ public sealed class OrdersController(
 
     /// <summary>
     /// The other half of the deliberate cycle. Calls back into ApiB, which calls ApiA
-    /// again, until <see cref="Corp.Api.Security.Delegation.DelegationDepthHandler"/>
+    /// again, until <see cref="Common.Api.Security.Delegation.DelegationDepthHandler"/>
     /// refuses and the request fails with HTTP 508 (README §7.7).
     /// </summary>
     [HttpGet("cycle-demo")]
@@ -108,7 +108,7 @@ public sealed class OrdersController(
         return Ok(new
         {
             depthOnArrival = Request.Headers.TryGetValue(
-                Corp.Api.Security.Delegation.DelegationDepthHandler.Header, out var raw)
+                Common.Api.Security.Delegation.DelegationDepthHandler.Header, out var raw)
                 ? raw.ToString() : "0",
             downstreamStatus = (int)response.StatusCode,
             downstreamBody = await response.Content.ReadAsStringAsync(ct),
