@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Identity Provider** | Okta (Identity Engine), Custom Authorization Server |
-| **Desktop clients** | .NET 8 · WPF · plain MVVM · Microsoft packages only |
+| **Desktop clients** | .NET 8 · WPF · `AppA` plain MVVM, Microsoft packages only · `AppB` the same on Prism 8 + DryIoc (GUIDE.md §11) |
 | **Services** | .NET 8 · ASP.NET Core · hosted on IIS (Windows) |
 | **User sign-in** | OAuth 2.0 Authorization Code + PKCE, system browser, loopback redirect |
 | **Cross-app SSO** | Okta browser session (primary) · Okta Native SSO (Appendix A) |
@@ -21,11 +21,13 @@
 > design, the delegation patterns — remain correct, as do the appendices with their raw HTTP
 > transcripts. **The code samples from §8.2 onward do not match the repository.** They describe an
 > implementation built on a third-party OIDC library and a Prism shell, with Telerik as an
-> option. All three are gone: the desktop stack is now `src/Common.Authentication/`, which
-> depends on nothing outside Microsoft's own packages, and the sample applications are plain
-> WPF with no MVVM framework. The layout in §8.1 has been corrected; the sections after it are
-> kept as a record of the design reasoning, not as a description of the code. Read this
-> document for the design; read [GUIDE.md](GUIDE.md) and the source for what is built.
+> option. That stack is gone: the desktop stack is now `src/Common.Authentication/`, which
+> depends on nothing outside Microsoft's own packages. `AppA` consumes it as plain WPF with no
+> MVVM framework; `AppB` deliberately puts it back under Prism 8 + DryIoc as a worked
+> integration example ([GUIDE.md §11](GUIDE.md#11-hosting-in-a-prism-application)) — the
+> library itself is unchanged either way. The layout in §8.1 has been corrected; the sections
+> after it are kept as a record of the design reasoning, not as a description of the code. Read
+> this document for the design; read [GUIDE.md](GUIDE.md) and the source for what is built.
 
 ## Table of contents
 
@@ -1093,7 +1095,7 @@ public sealed class DelegationDepthHandler : DelegatingHandler
 
 ## 8. The WPF client
 
-`AppA` and `AppB` are identical in structure and differ only in configuration. Build the authentication layer **once**, as a shared library, and reference it from both.
+`AppA` and `AppB` differ only in configuration and in host: `AppA` is plain WPF on Microsoft DI, `AppB` is Prism 8 on the DryIoc container ([GUIDE.md §11](GUIDE.md#11-hosting-in-a-prism-application)). Build the authentication layer **once**, as a shared library, and reference it from both — the one registration call is identical in each.
 
 ### 8.1 Solution layout
 
@@ -1109,7 +1111,8 @@ SSO.sln
 │   │   ├── Storage/                   ← DPAPI refresh token, access token cache
 │   │   └── Http/                      ← attaches the bearer, retries once on 401
 │   ├── Common.Api.Security/           ← shared, referenced by both APIs
-│   ├── AppA/  AppB/                   ← plain WPF and MVVM, no framework
+│   ├── AppA/                          ← plain WPF + Microsoft DI, no framework
+│   ├── AppB/                          ← same library, hosted on Prism 8 + DryIoc (GUIDE.md §11)
 │   ├── ApiA/  ApiB/
 └── tests/
 ```

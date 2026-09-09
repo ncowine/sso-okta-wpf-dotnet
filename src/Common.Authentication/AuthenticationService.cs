@@ -21,10 +21,14 @@ namespace Common.Authentication;
 internal sealed class AuthenticationService : IAuthenticationService, IDisposable
 {
     private readonly AuthenticationOptions _options;
-    private readonly OpenIdConnectClient _client;
+    private readonly OpenIdConnectClientFactory _clients;
     private readonly ITokenStore _store;
     private readonly AccessTokenCache _accessTokens;
     private readonly ILogger<AuthenticationService> _log;
+
+    /// <summary>The client for the server the user signs in against. Everything except a
+    /// resource with its own configured <c>Authority</c> goes through this one.</summary>
+    private OpenIdConnectClient PrimaryClient => _clients.Primary;
 
     /// <summary>
     /// Lets exactly one token operation happen at a time.
@@ -50,13 +54,13 @@ internal sealed class AuthenticationService : IAuthenticationService, IDisposabl
 
     public AuthenticationService(
         IOptions<AuthenticationOptions> options,
-        OpenIdConnectClient client,
+        OpenIdConnectClientFactory clients,
         ITokenStore store,
         AccessTokenCache accessTokens,
         ILogger<AuthenticationService> log)
     {
         _options = options.Value;
-        _client = client;
+        _clients = clients;
         _store = store;
         _accessTokens = accessTokens;
         _log = log;
@@ -79,7 +83,7 @@ internal sealed class AuthenticationService : IAuthenticationService, IDisposabl
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var tokens = await _client.RefreshAsync(_session.RefreshToken, cancellationToken)
+            var tokens = await PrimaryClient.RefreshAsync(_session.RefreshToken, cancellationToken)
                 .ConfigureAwait(false);
 
             await AcceptTokensAsync(tokens, cancellationToken).ConfigureAwait(false);
@@ -116,7 +120,7 @@ internal sealed class AuthenticationService : IAuthenticationService, IDisposabl
             {
                 // Try silently first. If the browser already has a session with the
                 // provider, the user sees nothing at all.
-                tokens = await _client.SignInAsync(scopes, interactive: false, cancellationToken)
+                tokens = await PrimaryClient.SignInAsync(scopes, interactive: false, cancellationToken)
                     .ConfigureAwait(false);
 
                 _log.LogInformation("Signed in without prompting, using the existing browser session");
@@ -125,7 +129,7 @@ internal sealed class AuthenticationService : IAuthenticationService, IDisposabl
             {
                 _log.LogInformation("The provider asked for a sign-in ({Reason}); opening the browser", silent.Error);
 
-                tokens = await _client.SignInAsync(scopes, interactive: true, cancellationToken)
+                tokens = await PrimaryClient.SignInAsync(scopes, interactive: true, cancellationToken)
                     .ConfigureAwait(false);
             }
 
@@ -166,7 +170,7 @@ internal sealed class AuthenticationService : IAuthenticationService, IDisposabl
             // there is nothing left to do.
             if (_accessTokens.TryGet(resourceName, out cached)) return cached;
 
-            if (!_options.Resources.ContainsKey(resourceName))
+            if (!_options.Resources.TryGetValue(resourceName, out var resource))
             {
                 throw new AuthenticationException(
                     "unknown_resource",
@@ -180,33 +184,132 @@ internal sealed class AuthenticationService : IAuthenticationService, IDisposabl
                     "not_signed_in", "There is no session. Sign in before calling this API.");
             }
 
-            TokenSet tokens;
-            try
-            {
-                tokens = await _client.RefreshAsync(_session.RefreshToken, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (AuthenticationException)
-            {
-                // The refresh token is gone for good — expired, rotated out, or revoked.
-                // Drop the session and say so, because the UI needs to tell the difference
-                // between "your session ended, sign in again" and "something broke".
-                ForgetSession();
-                Announce(AuthenticationChangeReason.SessionExpired);
-                throw;
-            }
+            // A resource with its own Authority is served by a different authorization
+            // server; it gets its own token, and never touches the primary session.
+            var (accessToken, expiresAt) = resource.HasOwnAuthority(_options.Authority)
+                ? await TokenFromResourceAuthorityAsync(resource, cancellationToken).ConfigureAwait(false)
+                : await TokenFromPrimaryAsync(cancellationToken).ConfigureAwait(false);
 
-            await AcceptTokensAsync(tokens, cancellationToken).ConfigureAwait(false);
-            Announce(AuthenticationChangeReason.TokenRefreshed);
-
-            // The refresh gives one access token; cache it under the resource that asked.
-            _accessTokens.Set(resourceName, tokens.AccessToken, tokens.ExpiresAt);
-            return tokens.AccessToken;
+            _accessTokens.Set(resourceName, accessToken, expiresAt);
+            return accessToken;
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>The default path: one refresh against the sign-in server yields one token.</summary>
+    private async Task<(string AccessToken, DateTimeOffset ExpiresAt)> TokenFromPrimaryAsync(
+        CancellationToken cancellationToken)
+    {
+        TokenSet tokens;
+        try
+        {
+            tokens = await PrimaryClient.RefreshAsync(_session.RefreshToken!, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (AuthenticationException)
+        {
+            // The refresh token is gone for good — expired, rotated out, or revoked.
+            // Drop the session and say so, because the UI needs to tell the difference
+            // between "your session ended, sign in again" and "something broke".
+            ForgetSession();
+            Announce(AuthenticationChangeReason.SessionExpired);
+            throw;
+        }
+
+        await AcceptTokensAsync(tokens, cancellationToken).ConfigureAwait(false);
+        Announce(AuthenticationChangeReason.TokenRefreshed);
+
+        return (tokens.AccessToken, tokens.ExpiresAt);
+    }
+
+    /// <summary>
+    /// Gets a token for a resource whose authorization server is not the one we signed in
+    /// against — an application calling two APIs directly, each with its own server.
+    /// </summary>
+    /// <remarks>
+    /// Uses a refresh token of its own if one is held; otherwise a silent <c>prompt=none</c>
+    /// authorize, which the browser session from the primary sign-in lets through without a
+    /// prompt. A failure here is that resource's problem alone — the primary session, and
+    /// every other resource, is untouched.
+    /// </remarks>
+    private async Task<(string AccessToken, DateTimeOffset ExpiresAt)> TokenFromResourceAuthorityAsync(
+        ResourceOptions resource, CancellationToken cancellationToken)
+    {
+        var client = _clients.ForAuthority(resource.Authority!);
+
+        if (_session.ResourceRefreshTokens.TryGetValue(client.Authority, out var stored))
+        {
+            try
+            {
+                var refreshed = await client.RefreshAsync(stored, cancellationToken).ConfigureAwait(false);
+                await RememberResourceRefreshTokenAsync(
+                    client.Authority, refreshed.RefreshToken ?? stored, cancellationToken).ConfigureAwait(false);
+                return (refreshed.AccessToken, refreshed.ExpiresAt);
+            }
+            catch (AuthenticationException ex)
+            {
+                _log.LogInformation(
+                    "The stored token for {Authority} could not be refreshed ({Reason}); re-authorizing silently",
+                    client.Authority, ex.Error);
+
+                await ForgetResourceRefreshTokenAsync(client.Authority, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        var scopes = ResourceAuthorityScopes(resource);
+
+        TokenSet tokens;
+        try
+        {
+            tokens = await client.SignInAsync(scopes, interactive: false, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (AuthenticationException silent) when (silent.NeedsUserInteraction)
+        {
+            _log.LogInformation(
+                "{Authority} asked for interaction ({Reason}); opening the browser",
+                client.Authority, silent.Error);
+
+            tokens = await client.SignInAsync(scopes, interactive: true, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (!string.IsNullOrEmpty(tokens.RefreshToken))
+        {
+            await RememberResourceRefreshTokenAsync(client.Authority, tokens.RefreshToken, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        _log.LogInformation("Obtained a token for {Authority} directly", client.Authority);
+        return (tokens.AccessToken, tokens.ExpiresAt);
+    }
+
+    /// <summary>
+    /// Scopes for a direct call to a resource's own server: <c>openid</c> so an ID token
+    /// comes back (the protocol client needs one), <c>offline_access</c> for a refresh token
+    /// so we do not re-authorize on every call, then the resource's own scopes.
+    /// <c>profile</c> and <c>email</c> are the primary server's concern, not this one's.
+    /// </summary>
+    private static string[] ResourceAuthorityScopes(ResourceOptions resource) =>
+        new[] { "openid", "offline_access" }
+            .Concat(resource.Scopes)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private async Task RememberResourceRefreshTokenAsync(
+        string authority, string refreshToken, CancellationToken cancellationToken)
+    {
+        _session.ResourceRefreshTokens[authority] = refreshToken;
+        await _store.SaveAsync(_session, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ForgetResourceRefreshTokenAsync(string authority, CancellationToken cancellationToken)
+    {
+        if (_session.ResourceRefreshTokens.Remove(authority))
+            await _store.SaveAsync(_session, cancellationToken).ConfigureAwait(false);
     }
 
     public void InvalidateAccessToken(string resourceName) => _accessTokens.Remove(resourceName);
@@ -235,7 +338,15 @@ internal sealed class AuthenticationService : IAuthenticationService, IDisposabl
             // file we failed to delete.
             if (!string.IsNullOrEmpty(refreshToken))
             {
-                await _client.RevokeRefreshTokenAsync(refreshToken, cancellationToken).ConfigureAwait(false);
+                await PrimaryClient.RevokeRefreshTokenAsync(refreshToken, cancellationToken).ConfigureAwait(false);
+            }
+
+            // And any token held for a resource's own authorization server, each against
+            // the server that issued it. Best-effort, exactly like the primary one.
+            foreach (var (authority, token) in _session.ResourceRefreshTokens)
+            {
+                await _clients.ForAuthority(authority)
+                    .RevokeRefreshTokenAsync(token, cancellationToken).ConfigureAwait(false);
             }
 
             ForgetSession();
@@ -249,7 +360,7 @@ internal sealed class AuthenticationService : IAuthenticationService, IDisposabl
 
         if (scope == SignOutScope.Everywhere && !string.IsNullOrEmpty(identityToken))
         {
-            await _client.SignOutOfProviderAsync(identityToken, cancellationToken).ConfigureAwait(false);
+            await PrimaryClient.SignOutOfProviderAsync(identityToken, cancellationToken).ConfigureAwait(false);
         }
     }
 

@@ -13,7 +13,8 @@ SSO.sln
 │   ├── Common.Authentication/    Desktop sign-in. PKCE, callback handling, DPAPI storage,
 │   │                             token attachment. Microsoft packages only.
 │   ├── Common.Api.Security/      API-side token validation and service-to-service delegation.
-│   ├── AppA/  AppB/              WPF clients. Plain WPF and MVVM — no framework.
+│   ├── AppA/                     WPF client. Plain WPF and MVVM — no framework.
+│   ├── AppB/                     The same client on Prism 8 + DryIoc (GUIDE.md §11).
 │   └── ApiA/  ApiB/              ASP.NET Core APIs that call each other, both directions.
 ├── tools/
 │   └── DevIdp/                   Local stand-in for Okta. Development only.
@@ -23,8 +24,10 @@ SSO.sln
 └── infra/okta/                   Terraform for a real tenant
 ```
 
-**Nine projects, no third-party packages.** Every dependency is published by Microsoft,
-so there is nothing to get approved before any of this can ship.
+**Nine projects.** The library, the API side, both APIs and `AppA` depend only on Microsoft's
+own packages — nothing to get approved before the security-relevant code ships. `AppB` adds
+Prism and DryIoc, confined to that project, as a worked example of hosting the library under
+an MVVM container framework ([GUIDE.md §11](GUIDE.md#11-hosting-in-a-prism-application)).
 
 ---
 
@@ -87,9 +90,10 @@ In AppB:
 
 | Click | What it shows |
 |---|---|
-| **Who am I?** | AppB's own token, from its own authorization server |
+| **Who am I?** | AppB's own token for ApiB, from ApiB's authorization server |
 | **Get invoice** | Requires App-Finance. Alice succeeds, Bob gets 403. |
-| **Call ApiA from ApiB** | The return direction — trust between APIs is configured per direction |
+| **Call ApiA directly** | AppB holding a *second* token, for ApiA's own authorization server. First click does a silent authorize — no prompt, because the ApiB sign-in already set the browser session — then a refresh token of its own is kept. Contrast with the next row. |
+| **Call ApiA from ApiB** | The delegated route: ApiB calls ApiA on your behalf (§7). Same data, different trust model. |
 | **Trip the cycle guard** | ApiB → ApiA → ApiB until the depth guard returns `508` |
 
 ### The two exercises worth doing

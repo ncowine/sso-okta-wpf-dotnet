@@ -25,6 +25,14 @@ picks the right machinery.
       "Orders": {
         "Scopes":      [ "orders.read", "orders.write" ],
         "BaseAddress": "https://orders.corp.example/"
+      },
+      "Billing": {
+        // This API has its OWN authorization server. The library gets a token for it with a
+        // silent authorize the first time you call it, and keeps a refresh token of its own.
+        // Omit Authority when the primary one above serves the API.
+        "Authority":   "https://dev-12345678.okta.com/oauth2/aus9z8y7x6w5v4u3t2s1r",
+        "Scopes":      [ "billing.read" ],
+        "BaseAddress": "https://billing.corp.example/"
       }
     }
   }

@@ -1,5 +1,6 @@
 using System.Windows;
 using Common.Authentication;
+using Prism.Mvvm;
 
 namespace AppB;
 
@@ -11,7 +12,7 @@ namespace AppB;
 /// browser. It takes <see cref="IAuthenticationService"/>, listens for changes, and
 /// exposes properties the XAML can bind to. That is the whole of the integration.
 /// </remarks>
-public sealed class ShellViewModel : ObservableObject
+public sealed class ShellViewModel : BindableBase
 {
     private readonly IAuthenticationService _auth;
     private readonly BillingViewModel _billing;

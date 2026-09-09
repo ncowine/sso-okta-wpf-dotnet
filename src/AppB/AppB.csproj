@@ -9,10 +9,16 @@
   </PropertyGroup>
 
   <!--
-    Microsoft packages only. No MVVM framework, no DI container library, nothing that
-    needs a third-party review before it can ship.
+    AppB is the Prism counterpart to AppA. AppA is plain WPF on Microsoft's own
+    dependency injection; AppB runs on Prism 8 with the DryIoc container, to show that
+    Common.Authentication drops into a container-framework host with no change to the
+    library. The two Prism packages and DryIoc are the only third-party references in
+    the repository, and they are confined to this one project — see GUIDE.md §11.
   -->
   <ItemGroup>
+    <PackageReference Include="Prism.DryIoc" Version="8.1.97" />
+    <PackageReference Include="DryIoc.Microsoft.DependencyInjection" Version="5.1.0" />
+
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />

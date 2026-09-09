@@ -202,6 +202,29 @@ public sealed class ResourceOptions
     /// <summary>The API's base address, used for the registered <c>HttpClient</c>.</summary>
     public string BaseAddress { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The authorization server that issues this resource's tokens, when it is not the one
+    /// the application signs in against. Leave unset when the primary
+    /// <see cref="AuthenticationOptions.Authority"/> serves this resource too.
+    /// </summary>
+    /// <remarks>
+    /// Set this when your APIs each have their own custom authorization server — their own
+    /// issuer, keys and audience — and this application calls more than one of them
+    /// <i>directly</i>. The library obtains a token for the resource with a silent
+    /// <c>prompt=none</c> authorize against this server, which completes without a prompt
+    /// because the browser session from the primary sign-in is already established, and
+    /// then keeps a refresh token of its own for it. A resource reached only through
+    /// service-to-service delegation (GUIDE §7) does not need this — the calling API mints
+    /// that token.
+    /// </remarks>
+    public string? Authority { get; set; }
+
+    /// <summary>True when this resource is served by an authorization server other than the primary one.</summary>
+    internal bool HasOwnAuthority(string primaryAuthority) =>
+        !string.IsNullOrWhiteSpace(Authority) &&
+        !string.Equals(
+            Authority!.TrimEnd('/'), primaryAuthority.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+
     public void Validate(string name)
     {
         if (Scopes.Length == 0)
@@ -217,6 +240,23 @@ public sealed class ResourceOptions
             throw new InvalidOperationException(
                 $"{AuthenticationOptions.SectionName}:Resources:{name}:BaseAddress " +
                 "must be an absolute URL.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(Authority))
+        {
+            if (Authority!.Contains("REPLACE", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"{AuthenticationOptions.SectionName}:Resources:{name}:Authority is not configured.");
+            }
+
+            if (!Uri.TryCreate(Authority, UriKind.Absolute, out var authority) || authority.Scheme != "https")
+            {
+                throw new InvalidOperationException(
+                    $"{AuthenticationOptions.SectionName}:Resources:{name}:Authority must be an " +
+                    "absolute https URL — the full issuer of the authorization server that issues " +
+                    "this API's tokens. Leave it unset if the primary Authority serves this API.");
+            }
         }
     }
 }

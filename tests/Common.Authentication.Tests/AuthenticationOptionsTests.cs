@@ -135,6 +135,50 @@ public class AuthenticationOptionsTests
         Assert.Throws<InvalidOperationException>(options.Validate);
     }
 
+    // ── A resource served by its own authorization server ────────────────────
+
+    [Fact]
+    public void A_resource_without_its_own_authority_uses_the_primary_one()
+    {
+        var options = Valid();
+
+        // Nothing configured: the primary Authority serves it, and the direct-call path
+        // is never taken.
+        Assert.False(options.Resources["Orders"].HasOwnAuthority(options.Authority));
+    }
+
+    [Fact]
+    public void A_resource_pointed_at_a_different_authority_is_called_directly()
+    {
+        var options = Valid();
+        options.Resources["Orders"].Authority = "https://dev-12345678.okta.com/oauth2/aus9zzzzzzzzzzzzzzzz";
+
+        options.Validate();
+        Assert.True(options.Resources["Orders"].HasOwnAuthority(options.Authority));
+    }
+
+    [Fact]
+    public void A_resource_authority_equal_to_the_primary_is_not_treated_as_separate()
+    {
+        var options = Valid();
+
+        // Same server, written with a trailing slash. Not a second authorization server.
+        options.Resources["Orders"].Authority = options.Authority + "/";
+
+        options.Validate();
+        Assert.False(options.Resources["Orders"].HasOwnAuthority(options.Authority));
+    }
+
+    [Fact]
+    public void Refuses_a_resource_authority_that_is_not_https()
+    {
+        var options = Valid();
+        options.Resources["Orders"].Authority = "http://dev-12345678.okta.com/oauth2/aus9";
+
+        var ex = Assert.Throws<InvalidOperationException>(options.Validate);
+        Assert.Contains("Authority", ex.Message);
+    }
+
     // ── The binder behaviour that has caused a real defect ───────────────────
 
     /// <summary>

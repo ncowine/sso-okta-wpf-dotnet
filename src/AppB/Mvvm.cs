@@ -1,40 +1,16 @@
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
 using System.Windows.Input;
 
 namespace AppB;
 
 /// <summary>
-/// The two pieces of MVVM plumbing this application needs, so it can bind without
-/// depending on an MVVM framework.
-/// </summary>
-/// <remarks>
-/// About forty lines, and it replaces a third-party package. If your own application
-/// already has a base view model, use that instead — nothing in
-/// <c>Common.Authentication</c> cares which one you use.
-/// </remarks>
-public abstract class ObservableObject : INotifyPropertyChanged
-{
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    /// <summary>Assigns a field and raises the change notification only if the value actually changed.</summary>
-    protected bool SetProperty<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
-    {
-        if (EqualityComparer<T>.Default.Equals(field, value)) return false;
-
-        field = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        return true;
-    }
-
-    protected void Raise([CallerMemberName] string? propertyName = null) =>
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-}
-
-/// <summary>
 /// An <see cref="ICommand"/> for an async handler.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Prism supplies <c>BindableBase</c> and <c>DelegateCommand</c>, and the view models use
+/// them — but Prism 8 has no command type for an <c>async</c> handler, so this small one
+/// stays. (AppA, which has no Prism, carries its own <c>ObservableObject</c> as well.)
+/// </para>
 /// <para>
 /// The important detail is that it <b>catches</b>. A command handler is invoked by WPF as
 /// <c>async void</c>: nothing awaits it, so an exception that escapes goes straight to
