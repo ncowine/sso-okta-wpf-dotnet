@@ -27,7 +27,8 @@ the security properties you were trying to buy.
 8. [Standing up a real Okta tenant](#8-standing-up-a-real-okta-tenant)
 9. [What not to do](#9-what-not-to-do)
 10. [Defending the design](#10-defending-the-design)
-11. [References](#11-references)
+11. [Hosting in a Prism application](#11-hosting-in-a-prism-application)
+12. [References](#12-references)
 
 ---
 
@@ -49,13 +50,16 @@ avoided.
 |---|---|
 | `Common.Authentication` | Everything needed to sign a user in: PKCE, callback handling, DPAPI storage, token attachment. No UI framework. |
 | `Common.Api.Security` | The other half — API-side token validation and the delegation patterns. |
-| `AppA`, `AppB` | The desktop clients. Plain WPF and MVVM, deliberately thin. |
+| `AppA` | A desktop client. Plain WPF and MVVM, no container library, deliberately thin. |
+| `AppB` | The same client on **Prism 8 + DryIoc**, to show `Common.Authentication` dropping into a container-framework host unchanged (§11). |
 | `ApiA`, `ApiB` | The APIs that call each other, in both directions. |
 | `tools/DevIdp` | A local stand-in for Okta. **Development only** — it authenticates nobody. |
 | `infra/okta` | Terraform for the real tenant. |
 
-**Nine projects and no third-party packages.** Every dependency is published by Microsoft,
-so nothing here needs a third-party review before it can ship.
+**Nine projects.** `Common.Authentication`, `Common.Api.Security`, both APIs and `AppA`
+depend on nothing outside Microsoft's own packages — so the security-relevant code needs no
+third-party review before it ships. `AppB` adds Prism and DryIoc, confined to that one
+project, purely as a worked example of hosting the library under an MVVM container framework.
 
 ### How to use this document
 
@@ -725,11 +729,33 @@ The alternative — one server with multiple audiences — is simpler to set up 
 trust boundaries: a token for one API becomes structurally similar to a token for another, and the
 audience check stops being the strong separation it should be.
 
-The cost is real and you should know it up front: a client that talks to two APIs needs two
-separate authorize round trips and holds two refresh tokens, because a refresh token is scoped to
-the server that issued it. The second round trip is silent — the browser session is already
-established — but the code must handle it, which is why `GetAccessTokenAsync` falls back to a
-`prompt=none` authorize when it has no refresh token for that server.
+The cost is real and you should know it up front: a client that calls two APIs **directly**,
+each on its own server, needs two authorize round trips and holds two refresh tokens, because
+a refresh token is scoped to the server that issued it. The second round trip is silent — the
+browser session from the first sign-in is already established — but the code must handle it.
+
+`Common.Authentication` does. Give the resource its own `Authority` in configuration:
+
+```jsonc
+"Resources": {
+  "ApiB": { "Scopes": [ "apib.read" ], "BaseAddress": "https://apib.corp.example/" },
+  "ApiA": {
+    "Authority":   "https://your-org.okta.com/oauth2/aus…apia",  // ApiA's own server
+    "Scopes":      [ "apia.read" ],
+    "BaseAddress": "https://apia.corp.example/"
+  }
+}
+```
+
+On the first call to that resource, `GetAccessTokenAsync` does a `prompt=none` authorize
+against its server, redeems the code, and keeps a refresh token of its own for it — all
+without a prompt, and without touching the primary session. `AppB` is configured this way:
+it signs in against ApiB's server and also calls ApiA directly. See
+[§11](#11-hosting-in-a-prism-application).
+
+A resource reached only through service-to-service delegation (§7) does **not** need this —
+the calling API mints that token. Configure `Authority` only for an API this desktop
+application calls itself.
 
 ### Setup order
 
@@ -818,6 +844,11 @@ forwards between processes; `http://127.0.0.1:8765/callback` binds a port. You c
 `RedirectUri` and the library picks the machinery. See
 [`src/Common.Authentication/README.md`](src/Common.Authentication/README.md).
 
+That snippet is the plain-WPF host, and `AppA` is the worked version of it. If your
+application runs on an MVVM container framework instead — Prism, in particular — the one call
+is unchanged but the wiring differs; [§11](#11-hosting-in-a-prism-application) covers it, with
+`AppB` as the worked example.
+
 ---
 
 ## 9. What not to do
@@ -886,6 +917,18 @@ No, that is the correct meaning of single sign-*out*: one session, one sign-out.
 people, so the application asks for confirmation and says plainly what will happen. Local sign-out,
 which discards only this application's tokens, is a separate option.
 
+**"Why is the auth library an `IServiceCollection` extension rather than something
+container-neutral?"**
+Because the things it registers — `IHttpClientFactory` with a per-resource named client and a
+token-attaching `DelegatingHandler`, `IOptions<AuthenticationOptions>` with binding and
+validation, `ILogger<T>` — have no other registration API. `Microsoft.Extensions.Http` is
+`IServiceCollection`-only. `IServiceCollection` is also the neutral format every serious .NET
+container adapts *from* — DryIoc, Autofac, Lamar, MS DI — and the convention every comparable
+library follows (`AddOpenIdConnect`, `AddMicrosoftIdentityWebApp`, IdentityModel's
+`AddOidcClient`). It keeps the library host-agnostic and testable with no UI framework
+present. Hosting it under a container framework is a one-time seam at the composition root,
+not a departure from that framework — see §11.
+
 ### Things this design deliberately does not do yet
 
 Being able to name the gaps is as useful as defending the choices.
@@ -901,7 +944,127 @@ Being able to name the gaps is as useful as defending the choices.
 
 ---
 
-## 11. References
+## 11. Hosting in a Prism application
+
+`AppA` is the plain host — WPF, `Microsoft.Extensions.DependencyInjection`, one call to
+`AddCommonAuthentication`. `AppB` is the same application on **Prism 8 with the DryIoc
+container**, and it exists to answer one question a real migration runs into: the library's
+entry point is an `IServiceCollection` extension, and a Prism 8 app does not have an
+`IServiceCollection`.
+
+The short answer is that it does — DryIoc is one, once you adapt it — and there is still
+exactly one container.
+
+`AppB` also carries the second thing worth showing: it calls **ApiA directly** as well as
+ApiB, and ApiA has its own authorization server. That is the `Resources:ApiA:Authority`
+configuration from §8 — one sign-in, a silent authorize for the second server, two refresh
+tokens. The button "Call ApiA directly" is that path; "Call ApiA from ApiB" beside it is
+delegation (§7), so the two sit next to each other for contrast.
+
+### Why the library is registered this way
+
+`AddCommonAuthentication` registers `IHttpClientFactory` (a named client per API, each with a
+token-attaching `DelegatingHandler`), `IOptions<AuthenticationOptions>` with binding and
+validation, and `ILogger<T>`. None of those has a registration API that isn't
+`IServiceCollection`: `Microsoft.Extensions.Http` in particular is `IServiceCollection`-only.
+`IServiceCollection` is also the format every .NET container adapts *from*, and the convention
+every comparable library follows. Re-expressing all of that as hand-rolled `IContainerRegistry`
+calls would mean reimplementing `Microsoft.Extensions.Http` — which is the actual divergence
+from standard practice, not the seam below.
+
+### Prism 9 has `RegisterServices`; Prism 8 does not
+
+On Prism 9 this is one call inside `RegisterTypes`:
+
+```csharp
+containerRegistry.RegisterServices(services => services.AddCommonAuthentication(config));
+```
+
+Prism 8 has no such method. Instead, hand Prism a DryIoc container that has already been
+populated from an `IServiceCollection`.
+
+### The composition root (Prism 8, DryIoc)
+
+`AddCommonAuthentication` is called on a normal `ServiceCollection`; that collection is
+populated into a DryIoc `Container` built with Prism's own rules; Prism is handed that
+container. From then on every view model resolves through `IContainerProvider` exactly as in
+any Prism app.
+
+```csharp
+// src/AppB/App.xaml.cs
+protected override IContainerExtension CreateContainerExtension()
+{
+    var env = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production";
+    var configuration = new ConfigurationBuilder()
+        .SetBasePath(AppContext.BaseDirectory)
+        .AddJsonFile("appsettings.json", optional: false)
+        .AddJsonFile($"appsettings.{env}.json", optional: true)
+        .Build();
+
+    var services = new ServiceCollection();
+    services.AddSingleton<IConfiguration>(configuration);
+    services.AddLogging(b => { /* Debug + SimpleConsole */ });
+
+    // The one call. Identical to AppA.
+    services.AddCommonAuthentication(configuration);
+
+    // DefaultRules keeps what Prism needs — concrete-type dynamic registration for
+    // views/view models, Func/Lazy without registration, last-registration-wins.
+    // WithDependencyInjectionAdapter layers Microsoft DI resolution semantics on top
+    // and populates the descriptors, keeping both.
+    var container = new Container(DryIocContainerExtension.DefaultRules)
+        .WithDependencyInjectionAdapter(services, registerDescriptor: SkipConsoleFormatterOptionsBinding);
+
+    return new DryIocContainerExtension(container);
+}
+```
+
+`RegisterTypes` then only registers the application's own view models. `IAuthenticationService`,
+`IHttpClientFactory` and `ILogger<T>` are already in the container.
+
+### The three details that bite
+
+**Package versions.** `Prism.DryIoc` 8.1.97 is compiled against **DryIoc 4.x** and throws
+`MissingMethodException` at runtime against DryIoc 5.x. That pins the adapter:
+`DryIoc.Microsoft.DependencyInjection` **5.1.0**, which resolves DryIoc 4.7 — the 6.x adapter
+line pulls DryIoc 5.x. `AppB.csproj` sets both explicitly.
+
+```xml
+<PackageReference Include="Prism.DryIoc" Version="8.1.97" />
+<PackageReference Include="DryIoc.Microsoft.DependencyInjection" Version="5.1.0" />
+```
+
+**The console-logger descriptor.** `AddSimpleConsole` / `AddConsole` register a non-generic
+`ConsoleFormatterConfigureOptions` as `IConfigureOptions<JsonConsoleFormatterOptions>` (and
+the Simple/Systemd variants). Microsoft DI accepts the mismatch; DryIoc's stricter
+assignability check rejects it, and the 4.x-era adapter is too old to special-case it. The
+`registerDescriptor` callback skips exactly those descriptors:
+
+```csharp
+private static bool SkipConsoleFormatterOptionsBinding(IRegistrator r, ServiceDescriptor d) =>
+    d.ImplementationType?.FullName == "Microsoft.Extensions.Logging.ConsoleFormatterConfigureOptions";
+```
+
+It only drops the *default* binding of formatter options from `IConfiguration`; an explicit
+`AddSimpleConsole(o => …)` still applies, so `dotnet run --project src/AppB > appb.log 2>&1`
+still shows the whole sign-in.
+
+**Startup order.** The private-use-scheme forward must run before Prism bootstraps, so it goes
+in an `OnStartup` override ahead of `base.OnStartup(e)`. Sign-in is kicked off from
+`OnInitialized`, after `base.OnInitialized()` has shown the shell — never from a view model
+constructor, which cannot await and deadlocks the dispatcher if it blocks.
+
+### If a reviewer asks "why not `IContainerRegistry` throughout?"
+
+It *is* `IContainerRegistry` throughout. `WithDependencyInjectionAdapter` does not introduce a
+second container or a second resolution root — it adds registration entries to the DryIoc
+container Prism already uses. `ContainerLocator`, `IContainerProvider` and `IContainerRegistry`
+all work unchanged. The only `IServiceCollection` in the codebase is local to
+`CreateContainerExtension`; nothing else — no module, no view model — ever sees it.
+
+---
+
+## 12. References
 
 Primary sources, so every claim here can be checked against a specification or vendor documentation
 rather than taken on trust.

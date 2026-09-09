@@ -103,11 +103,14 @@ public static class AuthenticationServiceCollectionExtensions
             return listener;
         });
 
-        services.AddSingleton(provider => new OpenIdConnectClient(
+        // One protocol client per authorization server, created on demand. Most applications
+        // only ever use the primary one; a resource with its own configured Authority is
+        // what brings a second into play.
+        services.AddSingleton(provider => new OpenIdConnectClientFactory(
             provider.GetRequiredService<IOptions<AuthenticationOptions>>().Value,
             provider.GetRequiredService<IRedirectListener>(),
             provider.GetRequiredService<IHttpClientFactory>(),
-            provider.GetRequiredService<ILoggerFactory>().CreateLogger("Common.Authentication.Protocol")));
+            provider.GetRequiredService<ILoggerFactory>()));
 
         services.AddSingleton<IAuthenticationService, AuthenticationService>();
 

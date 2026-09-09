@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Claims;
 using System.Web;
@@ -9,6 +10,36 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 namespace Common.Authentication.Protocol;
 
 /// <summary>
+/// Hands out an <see cref="OpenIdConnectClient"/> per authorization server, caching one
+/// instance each so discovery and JWKS are fetched once per server.
+/// </summary>
+/// <remarks>
+/// Most applications only ever touch <see cref="Primary"/>. A second server comes into play
+/// only when a <see cref="ResourceOptions.Authority"/> is configured — an application that
+/// calls two APIs directly, each with its own custom authorization server.
+/// </remarks>
+internal sealed class OpenIdConnectClientFactory(
+    AuthenticationOptions options,
+    IRedirectListener redirects,
+    IHttpClientFactory httpClientFactory,
+    ILoggerFactory loggerFactory)
+{
+    private readonly ConcurrentDictionary<string, OpenIdConnectClient> _clients =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The client for the server the user actually signs in against.</summary>
+    public OpenIdConnectClient Primary => ForAuthority(options.Authority);
+
+    public OpenIdConnectClient ForAuthority(string authority) =>
+        _clients.GetOrAdd(authority.TrimEnd('/'), key => new OpenIdConnectClient(
+            options,
+            key,
+            redirects,
+            httpClientFactory,
+            loggerFactory.CreateLogger("Common.Authentication.Protocol")));
+}
+
+/// <summary>
 /// Speaks OpenID Connect to one authorization server: discovery, sign-in, refresh,
 /// revocation, sign-out.
 /// </summary>
@@ -17,6 +48,10 @@ namespace Common.Authentication.Protocol;
 /// This is the only class that knows the protocol exists. It knows nothing about how the
 /// response comes back — that is <see cref="IRedirectListener"/>'s job — and nothing about
 /// storage or caching. Everything above it deals in users and tokens.
+/// </para>
+/// <para>
+/// One instance is bound to one authority. <see cref="OpenIdConnectClientFactory"/> keeps a
+/// cache of them, since most applications only ever need the one.
 /// </para>
 /// <para>
 /// Almost all of the protocol handling is Microsoft's, not ours.
@@ -37,8 +72,12 @@ internal sealed class OpenIdConnectClient
     private readonly ILogger _log;
     private readonly ConfigurationManager<OpenIdConnectConfiguration> _metadata;
 
+    /// <summary>The issuer this client talks to. Matches one configured <c>Authority</c>.</summary>
+    public string Authority { get; }
+
     public OpenIdConnectClient(
         AuthenticationOptions options,
+        string authority,
         IRedirectListener redirects,
         IHttpClientFactory httpClientFactory,
         ILogger log)
@@ -47,9 +86,10 @@ internal sealed class OpenIdConnectClient
         _redirects = redirects;
         _httpClientFactory = httpClientFactory;
         _log = log;
+        Authority = authority.TrimEnd('/');
 
         _metadata = new ConfigurationManager<OpenIdConnectConfiguration>(
-            $"{options.Authority.TrimEnd('/')}/.well-known/openid-configuration",
+            $"{Authority}/.well-known/openid-configuration",
             new OpenIdConnectConfigurationRetriever(),
             new HttpDocumentRetriever(httpClientFactory.CreateClient(HttpClientName))
             {

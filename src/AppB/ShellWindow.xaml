@@ -48,11 +48,13 @@
 
                 <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8">
                     <Button Content="Who am I?" Command="{Binding WhoAmICommand}"
-                            ToolTip="GET invoices/whoami - AppB's own token, from its own authorization server." />
+                            ToolTip="GET invoices/whoami - AppB's own token for ApiB, from ApiB's authorization server." />
                     <Button Content="Get invoice" Command="{Binding InvoiceCommand}"
                             ToolTip="Requires the App-Finance group. Alice succeeds, Bob is denied." />
+                    <Button Content="Call ApiA directly" Command="{Binding WhoAmIViaApiADirectCommand}"
+                            ToolTip="GET orders/whoami on ApiA. ApiA has its own authorization server; AppB gets a token for it with a silent authorize on first use, then keeps its own refresh token. No prompt - the ApiB sign-in already set the browser session." />
                     <Button Content="Call ApiA from ApiB" Command="{Binding OrderContextCommand}"
-                            ToolTip="The return direction. Trust between APIs is configured per direction." />
+                            ToolTip="The delegated route: ApiB calls ApiA on your behalf. Contrast with 'Call ApiA directly'. Trust between APIs is configured per direction." />
                     <Button Content="Trip the cycle guard" Command="{Binding CycleCommand}"
                             ToolTip="ApiB calls ApiA calls ApiB, until the depth guard returns 508." />
                 </WrapPanel>

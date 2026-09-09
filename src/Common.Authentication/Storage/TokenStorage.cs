@@ -15,9 +15,18 @@ namespace Common.Authentication.Storage;
 /// </remarks>
 internal sealed record StoredSession
 {
+    /// <summary>The refresh token from the primary authorization server — the one sign-in used.</summary>
     public string? RefreshToken { get; init; }
+
     public string? IdentityToken { get; init; }
     public DateTimeOffset StoredAt { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Refresh tokens for resources served by a different authorization server, keyed by
+    /// that server's authority. Empty for the common single-server case.
+    /// </summary>
+    public Dictionary<string, string> ResourceRefreshTokens { get; init; } =
+        new(StringComparer.OrdinalIgnoreCase);
 }
 
 internal interface ITokenStore
